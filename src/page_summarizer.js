@@ -1,6 +1,6 @@
 import { fetchAndStream } from './gpt.js';
 
-export async function fetchAndStreamSummary(port, content, instructions, model, profile) {
+export async function fetchAndStreamSummary(port, content, profile) {
   const { profiles, defaultProfile } = await chrome.storage.sync.get(['profiles', 'defaultProfile']);
 
   if (!profile) {
@@ -9,27 +9,24 @@ export async function fetchAndStreamSummary(port, content, instructions, model, 
 
   const profileKey = `profile__${profile}`;
   const profileData = await chrome.storage.sync.get(profileKey);
+  const profileItem=profileData[profileKey];
 
-  if (!instructions) {
-    instructions = profileData[profileKey].customPrompts.join('\n');
-  }
+  let instructions = profileItem.customPrompts;
+  let model=profileItem.model;
+  let systemMessage=profileItem.systemMessage;
 
   let messages = [
     {
       role: 'system',
-      content: 'You are a browser extension that helps the user understand the contents of a web page.',
+      content: systemMessage,
     },
     {
       role: 'user',
-      content: 'Web page contents: ' + content,
-    },
-    {
-      role: 'user',
-      content: instructions,
-    },
+      content:  'Instructions: ' + instructions + '\n\n' + 'Web page contents: ' + content,
+    }
   ];
-
-  return fetchAndStream(port, messages, { model: model, profile: profile });
+console.log("Messages: ", messages);
+  return fetchAndStream(port, messages, model, profile);
 }
 
 export function connectPageSummarizer() {
@@ -37,8 +34,8 @@ export function connectPageSummarizer() {
     if (port.name == 'summarize') {
       port.onMessage.addListener((msg) => {
         if (msg.action == 'SUMMARIZE') {
-          const { content, instructions, model, profile } = msg;
-          fetchAndStreamSummary(port, content, instructions, model, profile);
+          const { content, profile } = msg;
+          fetchAndStreamSummary(port, content, profile);
         }
       });
     }

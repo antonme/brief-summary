@@ -28,9 +28,21 @@
         <div class="card-header">Global settings</div>
         <div class="card-body">
           <div class="input-group">
-            <label class="input-group-text" for="apiKey">OpenAI API Key</label>
-            <input type="text" id="apiKey" name="apiKey" class="form-control" />
+            <label class="input-group-text" for="openAIKey">OpenAI API Key</label>
+            <input type="text" id="openAIKey" name="openAIKey" class="form-control" />
             <button id="open-api-keys" class="btn btn-primary btn-sm" title="OpenAI API keys">&#x2197;</button>
+          </div>
+
+          <div class="input-group mt-3">
+            <label class="input-group-text" for="anthropicApiKey">Anthropic API Key</label>
+            <input type="text" id="anthropicApiKey" name="anthropicApiKey" class="form-control" />
+            <button id="open-anthropic-keys" class="btn btn-primary btn-sm" title="Anthropic API keys">&#x2197;</button>
+          </div>
+
+          <div class="input-group mt-3">
+            <label class="input-group-text" for="perplexityApiKey">Perplexity API Key</label>
+            <input type="text" id="perplexityApiKey" name="perplexityApiKey" class="form-control" />
+            <button id="open-perplexity-keys" class="btn btn-primary btn-sm" title="Perplexity API keys">&#x2197;</button>
           </div>
 
           <div class="form-check mb-3">
@@ -63,17 +75,29 @@
           <div class="mb-3">
             <label for="model" class="form-label">Default model</label>
             <select id="model" name="model" class="form-select">
-              <option value="gpt-3.5-turbo">GPT 3.5 Turbo</option>
-              <option value="gpt-3.5-turbo-16k" selected>GPT 3.5 Turbo 16K</option>
-              <option value="gpt-4">GPT 4</option>
-              <option value="gpt-4-turbo">GPT 4 Turbo</option>
+              <!-- OpenAI Models -->
               <option value="gpt-4o">GPT 4o</option>
+              <option value="gpt-4">GPT 4</option>
               <option value="gpt-4o-mini">GPT 4o Mini</option>
+
+              <!-- Anthropic Models  -->
+              <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+              <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+
+              <!-- Perplexity Models -->
+              <option value="llama-3.1-sonar-huge-128k-online">Perplexity Sonar Huge</option>
+              <option value="llama-3.1-sonar-large-128k-online">Perplexity Sonar Large</option>
             </select>
           </div>
 
           <div class="mb-3">
-            <label for="customPrompts" class="form-label">Custom Prompts (One per line)</label>
+            <label for="systemMessage" class="form-label">System Message</label>
+            <textarea id="systemMessage" name="systemMessage" class="form-control" rows="3" 
+              placeholder="Define the AI assistant's behavior and tone"></textarea>
+          </div>
+
+          <div class="mb-3">
+            <label for="customPrompts" class="form-label">Custom Prompt</label>
             <textarea id="customPrompts" name="customPrompts" class="form-control" rows="5"></textarea>
             <small id="customPromptsCounter" class="form-text text-muted text-end d-block"></small>
           </div>

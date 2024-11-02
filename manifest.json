@@ -9,6 +9,11 @@
     "scripting",
     "contextMenus"
   ],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.perplexity.ai/*"
+  ],
   "icons": {
     "16": "assets/icon_16.png",
     "48": "assets/icon_48.png",
@@ -23,8 +28,17 @@
     }
   },
   "background": {
+    "scripts": ["src/background.js"],
     "service_worker": "src/background.js",
     "type": "module"
   },
-  "options_page": "src/pages/config.html"
+  "options_ui": {
+    "page": "src/pages/config.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{A1834A25-9D45-43A1-8EE3-64B7CE7B0F3A}"
+    }
+  }
 }

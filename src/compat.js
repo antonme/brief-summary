@@ -64,7 +64,7 @@ export async function updateConfigToUseProfiles_20231117() {
     if (oldConfig.model && !oldConfig.profiles) {
       // Found old configuration, migrate to new profile-based format
       const defaultProfileConfig = {
-        model: oldConfig.model || 'gpt-3.5-turbo-16k',
+        model: oldConfig.model || 'gpt-4-mini',
         customPrompts: oldConfig.customPrompts || [],
       };
 

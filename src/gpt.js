@@ -3,8 +3,16 @@ import { debug } from './util.js';
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 const DATA_MARKER = 'data: ';
 const DONE_MARKER = `${DATA_MARKER}[DONE]`;
-const PORT_CLOSED = 'Error: Attempting to use a disconnected port object';
-const ERR_API_KEY = 'Error: API key is not set';
+//const PORT_CLOSED = 'Error: Attempting to use a disconnected port object';
+const ERR_OPENAI_KEY = 'Error: OpenAI API key is not set';
+
+// Add new constants for Anthropic
+const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+const ERR_ANTHROPIC_API_KEY = 'Error: Anthropic API key is not set';
+
+// Add new constants for Perplexity
+const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/v1/chat/completions';
+const ERR_PERPLEXITY_API_KEY = 'Error: Perplexity API key is not set';
 
 /*------------------------------------------------------------------------------
  * Builds up a buffer of JSON data and returns the parsed JSON object once
@@ -60,13 +68,13 @@ function GptResponseReader(response) {
     const { value: chunk, done: readerDone } = await reader.read();
 
     if (readerDone) {
-      debug('FINISH');
+      await debug('FINISH');
       done = true;
       return { data: buffer, error: error };
     }
 
     const string = new TextDecoder().decode(chunk);
-    debug('RECV:', string);
+    await debug('RECV:', string);
 
     // Some errors are returned as the initial message, but they can be
     // multi-line, so we have to attempt to parse them here to see if they are
@@ -86,7 +94,7 @@ function GptResponseReader(response) {
     const lines = string.split('\n').filter((line) => line !== '');
     const json_buffer = JsonBuffer();
 
-    debug('LINES:', lines);
+    await debug('LINES:', lines);
 
     for (const line of lines) {
       if (line === DONE_MARKER) {
@@ -114,100 +122,297 @@ function GptResponseReader(response) {
   };
 }
 
-async function fetchCompletions(apiKey, payload) {
+// Modify fetchCompletions to handle CORS for Perplexity
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false) {
   const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
   };
 
-  return fetch(ENDPOINT, {
-    method: 'POST',
-    headers: headers,
-    body: JSON.stringify(payload),
-  });
+  if (useAnthropicApi) {
+    headers['x-api-key'] = apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    
+    console.log('Sending request to Anthropic API:', {
+      endpoint: ANTHROPIC_ENDPOINT,
+      headers: { ...headers, 'x-api-key': '***' },
+      payload
+    });
+
+    return fetch(ANTHROPIC_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+  } else if (usePerplexityApi) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    
+    console.log('Sending request to Perplexity API:', {
+      endpoint: PERPLEXITY_ENDPOINT,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(PERPLEXITY_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      mode: 'cors',
+      body: JSON.stringify(payload)
+    });
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    
+    console.log('Sending request to OpenAI API:', {
+      endpoint: ENDPOINT,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+  }
 }
 
 function gptError(port, error) {
+  console.error('Sending error:', error);
   port.postMessage({ action: 'GPT_ERROR', error: error });
 }
 
 function gptMessage(port, summary) {
+  console.log('Sending message:', summary.slice(-50)); // Log last 50 chars
   port.postMessage({ action: 'GPT_MESSAGE', summary: summary });
 }
 
 function gptDone(port, summary) {
+  console.log('Sending done signal');
   port.postMessage({ action: 'GPT_DONE', summary: summary });
 }
 
 //------------------------------------------------------------------------------
-// Takes the list of message prompts and sends them to OpeanAI's chat
+// Takes the list of message prompts and sends them to OpenAI's chat
 // completions endpoint. It then streams the responses back to the
 // caller-supplied port.
 //------------------------------------------------------------------------------
-export async function fetchAndStream(port, messages, options = {}) {
-  const config = await chrome.storage.sync.get(['apiKey', 'profiles', 'defaultProfile']);
-  const profileName = options.profile || config.defaultProfile;
+export async function fetchAndStream(port, messages, model, profileName) {
+  // Get global API keys
+  const { openAIKey, anthropicApiKey, perplexityApiKey } = await chrome.storage.sync.get([
+    'openAIKey',
+    'anthropicApiKey',
+    'perplexityApiKey'
+  ]);
+ console.log("Model: ", model);
+  // Determine which API to use based on model
+  const useAnthropicApi = model.startsWith('claude-');
+  const usePerplexityApi = model.startsWith('llama-');
+  
+  // Select appropriate API key from global keys
+  const selectedApiKey = useAnthropicApi ? anthropicApiKey : 
+                        usePerplexityApi ? perplexityApiKey : 
+                        openAIKey;
+
+  // Add validation for API key
+  if (!selectedApiKey) {
+    const errorMsg = useAnthropicApi ? ERR_ANTHROPIC_API_KEY : 
+                    usePerplexityApi ? ERR_PERPLEXITY_API_KEY :
+                    ERR_OPENAI_KEY;
+    console.error('API Key Error:', errorMsg);
+    gptError(port, errorMsg);
+    return;
+  }
+
+  // Debug current profile and storage
+  const { profiles, defaultProfile } = await chrome.storage.sync.get(['profiles', 'defaultProfile']);
   const profileKey = `profile__${profileName}`;
+
+  console.log('Profile debug:', {
+    profileName,
+    profileKey,
+    hasProfiles: !!profiles,
+    defaultProfile
+  });
+
   const profileData = await chrome.storage.sync.get(profileKey);
   const profile = profileData[profileKey];
 
-  let connected = true;
+  console.log('Retrieved profile:', {
+    exists: !!profile,
+    model: profile?.model,
+  });
 
+
+  let payload;
+  if (useAnthropicApi) {
+    // Format payload for Anthropic API
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n\n');
+    
+    payload = {
+      model: profile.model,
+      messages: [{
+        role: 'user',
+        content: userMessages
+      }],
+      system: systemMessage,
+      stream: true,
+      max_tokens: 4096
+    };
+  } else if (usePerplexityApi) {
+    // Format payload for Perplexity API
+    payload = {
+      model: profile.model,
+      messages: messages,
+      stream: true
+    };
+  } else {
+    // Format payload for OpenAI API
+    payload = {
+      model: profile.model,
+      messages: messages,
+      stream: true
+    };
+  }
+
+
+  // Determine which model to use and log it
+  console.log('Selected model:', profile.model);
+
+  console.log('Using Anthropic API:', useAnthropicApi);
+  console.log('Using Perplexity API:', usePerplexityApi);
+  
+  // Use profile-specific API keys
+  let apiKey;
+  if (useAnthropicApi) {
+    apiKey = profile.anthropicApiKey;
+  } else if (usePerplexityApi) {
+    apiKey = profile.perplexityApiKey;
+  } else {
+    apiKey = profile.apiKey; // OpenAI key
+  }
+
+
+
+
+  let connected = true;
   port.onDisconnect.addListener(() => {
     connected = false;
   });
 
-  if (config.apiKey === null || config.apiKey.length === 0) {
-    gptError(port, ERR_API_KEY);
-    return;
-  }
-
   try {
-    const payload = {
-      model: options.model || profile.model,
-      messages: messages,
-      stream: true,
-    };
+    await debug('PAYLOAD', payload);
 
-    debug('PAYLOAD', payload);
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi);
+    
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('API Error:', error);
+      throw new Error(error.error?.message || 'API request failed');
+    }
 
-    const response = await fetchCompletions(config.apiKey, payload);
-    const reader = GptResponseReader(response);
-    let lastMessage = null;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let summary = '';
 
     while (connected) {
-      const message = await reader();
+      const { value, done } = await reader.read();
+      if (done) break;
 
-      if (!connected) {
-        debug('DISCONNECTED');
-        break;
-      }
+      buffer += decoder.decode(value);
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
 
-      if (message === null) {
-        break;
-      }
+      for (const line of lines) {
+        if (line.length === 0) continue;
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
 
-      debug('MSG:', message);
+          try {
+            const parsed = JSON.parse(data);
+            if (useAnthropicApi) {
+              // Handle Anthropic streaming format
+              const content = parsed.delta?.text || '';
+              if (content) {
+                summary += content;
+                gptMessage(port, summary);
+              }
+            } else if (usePerplexityApi) {
+              // Log the initial response
+              console.log('Perplexity Response:', response);
+              
+              if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Perplexity API Error:', errorData);
+                throw new Error(errorData.error?.message || 'Perplexity API request failed');
+              }
 
-      const { data: data, error: error } = message;
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
 
-      if (connected) {
-        if (error !== null) {
-          gptError(port, error);
-        } else if (data !== null) {
-          gptMessage(port, data);
-          lastMessage = data;
+              try {
+                while (connected) {
+                  const { value, done } = await reader.read();
+                  if (done) break;
+
+                  const text = decoder.decode(value);
+                  console.log('Raw chunk:', text); // Debug log
+
+                  const lines = text.split('\n');
+                  for (const line of lines) {
+                    if (!line.trim()) continue;
+
+                    try {
+                      if (line.startsWith('data: ')) {
+                        const jsonStr = line.slice(6);
+                        if (jsonStr === '[DONE]') continue;
+                        
+                        const parsed = JSON.parse(jsonStr);
+                        const content = parsed.choices?.[0]?.delta?.content;
+                        if (content) {
+                          summary += content;
+                          gptMessage(port, summary);
+                        }
+                      }
+                    } catch (e) {
+                      console.log('Parse error on line:', line);
+                      continue;
+                    }
+                  }
+                }
+
+                if (summary) {
+                  gptDone(port, summary);
+                }
+                return;
+              } catch (e) {
+                console.error('Stream processing error:', e);
+                throw e;
+              }
+            } else {
+              // Handle OpenAI streaming format
+              const content = parsed.choices[0]?.delta?.content || '';
+              if (content) {
+                summary += content;
+                gptMessage(port, summary);
+              }
+            }
+          } catch (e) {
+            console.error('Parse error:', e, 'Line:', line);
+          }
         }
-      } else {
-        debug('DISCONNECTED');
-        break;
       }
     }
 
-    if (connected) {
-      gptDone(port, lastMessage);
+    if (summary) {
+      gptDone(port, summary);
+    } else {
+      throw new Error('No content received from API');
     }
   } catch (error) {
-    console.error(error);
+    console.error('Stream error:', error);
+    gptError(port, error.message);
   }
 }

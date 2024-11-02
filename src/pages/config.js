@@ -57,14 +57,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function buildDefaultProfile() {
     return {
-      model: 'gpt-3.5-turbo-16k',
-      customPrompts: [],
+      model: 'gpt-4o-mini',
+      customPrompts: '',
+      systemMessage: ''
     };
   }
 
   function buildDefaultConfig() {
     return {
-      apiKey: '',
+      openAIKey: '',
+      anthropicApiKey: '',
+      perplexityApiKey: '',
       debug: false,
       defaultProfile: 'default',
       profiles: ['default'],
@@ -73,61 +76,62 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function saveConfig() {
-    // Global options
     const debug = document.getElementById('debug').checked;
-    const apiKey = document.getElementById('apiKey').value.trim();
-
-    // Profile options
-    const name = document.getElementById('name').value.trim();
+    const profileName = document.getElementById('name').value.trim();
     const model = document.getElementById('model').value.trim();
-    const customPrompts = document.getElementById('customPrompts').value.split('\n');
+    const customPrompts = document.getElementById('customPrompts').value.trim();
+    const systemMessage = document.getElementById('systemMessage').value.trim();
     const isDefault = document.getElementById('default').checked;
+    
+    // Save global API keys
+    const globalConfig = {
+      openAIKey: document.getElementById('openAIKey').value.trim(),
+      anthropicApiKey: document.getElementById('anthropicApiKey').value.trim(),
+      perplexityApiKey: document.getElementById('perplexityApiKey').value.trim(),
+      debug: debug
+    };
+    
+    // Save global settings
+    await chrome.storage.sync.set(globalConfig);
 
-    // Basic validations
-    if (apiKey == '') {
-      showError('An API key is required. Get one <a href="https://beta.openai.com">here</a>.');
-      return;
-    }
-
-    if (name == '') {
-      showError('Profile name cannot be empty.');
-      return;
-    }
-
+    // Create new profile data
     const newProfile = {
       model: model,
       customPrompts: customPrompts,
+      systemMessage: systemMessage
     };
 
-    // The user is changing the current profile's name
-    if (currentProfile !== null && name !== currentProfile) {
-      config.profiles = config.profiles.filter((profile) => profile !== currentProfile);
+    // Update config object
+    if (currentProfile && profileName !== currentProfile) {
+      // Rename profile
+      config.profiles = config.profiles.filter(p => p !== currentProfile);
       delete config[`profile__${currentProfile}`];
-      config.profiles.push(name);
-      config[`profile__${name}`] = newProfile;
-      currentProfile = name;
+      config.profiles.push(profileName);
+      config[`profile__${profileName}`] = newProfile;
+      currentProfile = profileName;
+    } else if (!currentProfile) {
+      // New profile
+      currentProfile = profileName;
+      config.profiles.push(profileName);
+      config[`profile__${profileName}`] = newProfile;
+    } else {
+      // Update existing profile
+      config[`profile__${profileName}`] = newProfile;
     }
-    // The user is adding a new profile
-    else if (currentProfile === null) {
-      currentProfile = name;
-      config.profiles.push(name);
-      config[`profile__${name}`] = newProfile;
-    }
-    // The user is updating the current profile
-    else {
-      config[`profile__${name}`] = newProfile;
-    }
-
-    config.debug = debug;
-    config.apiKey = apiKey;
 
     if (isDefault) {
-      config.defaultProfile = name;
+      config.defaultProfile = profileName;
     }
 
-    await chrome.storage.sync.set(config);
+    // Save the profiles
+    await chrome.storage.sync.set({
+      profiles: config.profiles,
+      defaultProfile: config.defaultProfile,
+      [`profile__${profileName}`]: newProfile
+    });
+
     await reloadConfig();
-    await selectProfile(name);
+    await selectProfile(profileName);
 
     window.scrollTo(0, 0);
     showSuccess('Settings saved.');
@@ -183,22 +187,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function reloadConfig() {
-    const profileKeys = (await chrome.storage.sync.get('profiles')).profiles.map((name) => `profile__${name}`);
-    config = await chrome.storage.sync.get(['apiKey', 'defaultProfile', 'debug', 'profiles', ...profileKeys]);
+    const profileKeys = (await chrome.storage.sync.get('profiles')).profiles?.map((name) => `profile__${name}`) || [];
+    config = await chrome.storage.sync.get([
+      'openAIKey',
+      'anthropicApiKey',
+      'perplexityApiKey',
+      'defaultProfile', 
+      'debug', 
+      'profiles', 
+      ...profileKeys
+    ]);
     console.log('Config', config);
 
     if (config.profiles === undefined) {
-      config.profiles = ['default'];
-      config.defaultProfile = 'default';
-      config[`profile__default`] = buildDefaultProfile();
+      config = {
+        ...config,
+        profiles: ['default'],
+        defaultProfile: 'default',
+        [`profile__default`]: buildDefaultProfile()
+      };
     }
 
     // Update state variables
     currentProfile = config.defaultProfile;
 
-    // Then update the form with global configs
-    debug.checked = !!(config.debug || false);
-    apiKey.value = config.apiKey;
+    // Update the form with global configs - using nullish coalescing for safety
+    debug.checked = config.debug ?? false;
+    document.getElementById('openAIKey').value = config.openAIKey ?? '';
+    document.getElementById('anthropicApiKey').value = config.anthropicApiKey ?? '';
+    document.getElementById('perplexityApiKey').value = config.perplexityApiKey ?? '';
 
     // Load profiles into the dropdown and select the current profile.
     // Sort the profiles such that the default profile is always first.
@@ -228,18 +245,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   function selectProfile(profile) {
     if (config.profiles.includes(profile)) {
       const data = config[`profile__${profile}`];
+      console.log('Loading profile:', {
+        name: profile,
+        model: data.model,
+        customPrompts: data.customPrompts,
+        systemMessage: data.systemMessage
+      });
 
       currentProfile = profile;
-      profileSelector.value = profile;
-
-      name.value = profile;
-      model.value = data.model || 'gpt-3.5-turbo-16k';
-      customPrompts.value = data.customPrompts.join('\n') || '';
-      isDefault.checked = profile === config.defaultProfile;
-
-      // Update the byte counter after setting the prompt value
+      document.getElementById('profileSelector').value = profile;
+      document.getElementById('name').value = profile;
+      document.getElementById('model').value = data.model || 'gpt-4o-mini';
+      document.getElementById('customPrompts').value = data.customPrompts || '';
+      document.getElementById('systemMessage').value = data.systemMessage || '';
+      document.getElementById('default').checked = profile === config.defaultProfile;
+      
+      // Remove API key loading from profile selection
       updateCustomPromptsCounter();
-
       return;
     }
 

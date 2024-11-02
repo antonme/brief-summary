@@ -1,9 +1,15 @@
 document.addEventListener('DOMContentLoaded', async function () {
   const query = new URLSearchParams(window.location.search);
+  let tabId = query.get('tabId');  // Retrieve the tabId from URL parameters
+
+  if (!tabId) {
+    // If no tabId is found in the URL, default to the current active tab
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = tabs[0].id;
+  }
 
   const target = document.getElementById('summary');
   const modelDropdown = document.getElementById('model');
-  const instructions = document.getElementById('instructions');
   const profileContainer = document.getElementById('profileContainer');
 
   //----------------------------------------------------------------------------
@@ -17,19 +23,16 @@ document.addEventListener('DOMContentLoaded', async function () {
   //----------------------------------------------------------------------------
   // Tab ID
   //----------------------------------------------------------------------------
-  let tabId;
-
-  if (query.has('tabId')) {
-    tabId = parseInt(query.get('tabId'), 10);
-  } else {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabId = tabs[0].id;
-  }
 
   // Assigns the tabId to the new window link, so that when you open the popup
   // in a new window, the new window will have the same tabId.
   document.getElementById('newWindow').addEventListener('click', async () => {
-    chrome.tabs.create({ url: 'src/pages/popup.html?tabId=' + tabId });
+    if (tabId === undefined) {
+      // Ensure tabId is defined, if not, fetch it again
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tabs[0].id;
+    }
+    chrome.tabs.create({ url: `src/pages/popup.html?tabId=${tabId}` });
   });
 
   // Returns the URL of the original tab, identified by the global tabId.
@@ -42,6 +45,8 @@ document.addEventListener('DOMContentLoaded', async function () {
   // Copy summary to clipboard
   //----------------------------------------------------------------------------
   const copySummaryButton = document.getElementById('copySummary');
+  const summarizeButton = document.getElementById('summarize');
+
 
   function enableCopyButton() {
     copySummaryButton.classList.remove('btn-outline-secondary');
@@ -75,6 +80,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         console.error('Failed to copy text: ', err);
       }
     }
+  });
+
+  summarizeButton.addEventListener('click', async () => {
+    working = true;
+    updateSummary('Fetching summary...');
+    const summary = await requestNewSummary();
+    await cacheSummary(url, summary);
   });
 
   //----------------------------------------------------------------------------
@@ -188,7 +200,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       document.body.style.height = 'auto';
     } else {
       const width = Math.min(780, Math.round(screen.width * 0.6 * 0.1) * 10);
-      const height = Math.min(580, Math.round(screen.height * 0.75 * 0.1) * 10);
+      const height = 900
       document.body.style.width = `${width}px`;
       document.body.style.height = `${height}px`;
     }
@@ -256,50 +268,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     chrome.runtime.openOptionsPage();
   });
 
-  //----------------------------------------------------------------------------
-  // Powers the doc hint in the instructions text area. Provides a default when
-  // the user has not yet created a profile. Select all text in the
-  // instructions textarea when the user clicks on it.
-  //----------------------------------------------------------------------------
-  const defaultInstruction = 'Please summarize this web page.';
-
-  instructions.value ||= defaultInstruction;
-
-  instructions.addEventListener('focus', () => {
-    instructions.select();
-  });
-
-  instructions.addEventListener('focus', () => {
-    if (instructions.value == defaultInstruction) {
-      instructions.value = '';
-      instructions.classList.remove('hint');
-    }
-  });
-
-  instructions.addEventListener('blur', () => {
-    if (instructions.value == '') {
-      instructions.value = defaultInstruction;
-      instructions.classList.add('hint');
-    }
-  });
-
-  //----------------------------------------------------------------------------
-  // powers the model dropdown
-  //----------------------------------------------------------------------------
-  async function setModel(model = null) {
-    if (model == null) {
-      const profileKey = `profile__${currentProfile}`;
-      const profileData = await chrome.storage.sync.get(profileKey);
-      modelDropdown.value = profileData[profileKey].model;
-    } else {
-      modelDropdown.value = model;
-    }
-  }
-
-  async function getModel() {
-    const selectedModel = modelDropdown ? modelDropdown.value : undefined;
-    return selectedModel || 'gpt-3.5-turbo-16k'; // Fallback to a default model
-  }
 
   //----------------------------------------------------------------------------
   // powers the profile dropdown
@@ -346,7 +314,6 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (profileName === lastUsedProfile) {
         const profileKey = `profile__${profileName}`;
         const profileData = await chrome.storage.sync.get(profileKey);
-        setModel(profileData[profileKey].model);
       }
     });
 
@@ -378,34 +345,6 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const profileKey = `profile__${selectedProfileName}`;
     const profileData = await chrome.storage.sync.get(profileKey);
-
-    if (profileData[profileKey]) {
-      const selectedProfile = profileData[profileKey];
-
-      setModel(selectedProfile.model);
-
-      // Update "custom instructions" textarea with the profile's custom prompts
-      instructions.value = selectedProfile.customPrompts.join('\n');
-
-      // Make sure to handle the case when there are no custom prompts
-      if (!instructions.value) {
-        instructions.value = defaultInstruction;
-        instructions.classList.add('hint');
-      } else {
-        // Remove the hint class if the custom prompts are not empty
-        instructions.classList.remove('hint');
-      }
-    } else if (selectedProfileName === '') {
-      reportError(noProfilesMessage);
-      setModel('gpt-3.5-turbo-16k'); // Fallback to a default model
-      instructions.value = defaultInstruction; // Fallback instructions
-      instructions.classList.add('hint');
-    } else {
-      reportError(`Profile "${selectedProfileName}" not found.`);
-      setModel('gpt-3.5-turbo-16k'); // Fallback to a default model
-      instructions.value = defaultInstruction; // Fallback instructions
-      instructions.classList.add('hint');
-    }
   }
 
   // Initial call to load profiles
@@ -418,7 +357,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   // Autoscroll to the bottom of the page when new content is added. If the
   // user scrolls up, disable autoscroll until they scroll back to the bottom.
   //----------------------------------------------------------------------------
-  let autoScroll = true;
+  let autoScroll = false;
 
   window.addEventListener('scroll', () => {
     const { scrollHeight, scrollTop, clientHeight } = document.documentElement;
@@ -482,13 +421,10 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   async function requestNewSummary() {
-    const model = await getModel();
     const content = await getReferenceText()
       .then((text) => {
         postMessage({
           action: 'SUMMARIZE',
-          instructions: instructions.value,
-          model: model,
           profile: currentProfile,
           content: text,
         });
@@ -503,7 +439,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   // Restore the last page summary when the popup is opened
   restoreSummary().then((result) => {
     if (result != null) {
-      setModel(result.model);
 
       updateSummary(marked.marked(result.summary));
 
@@ -519,14 +454,47 @@ document.addEventListener('DOMContentLoaded', async function () {
   // Flag to prevent multiple clicks
   let working = false;
 
-  // Handle the summarize button click
-  document.getElementById('summarize').addEventListener('click', function () {
-    if (working) {
-      return;
-    }
+  // Function to check if a summary is already cached
+  async function isSummaryCached(url) {
+    if (typeof caches === "undefined") return false;
 
+    const cache = await caches.open('summary-cache');
+    const cachedResponse = await cache.match(url);
+    return cachedResponse !== undefined;
+  }
+
+  // Function to get the cached summary
+  async function getCachedSummary(url) {
+    const cache = await caches.open('summary-cache');
+    const cachedResponse = await cache.match(url);
+    console.log("url", url);
+    console.log("cachedResponse", cachedResponse.text());
+    if (cachedResponse) {
+      return cachedResponse.text();
+    }
+    return null;
+  }
+
+  // Function to cache the summary
+  async function cacheSummary(url, summary) {
+    const cache = await caches.open('summary-cache');
+    const response = new Response(summary, {
+      headers: { 'Content-Type': 'text/plain' }
+    });
+    await cache.put(url, response);
+  }
+
+  // Automatically start summarization when the popup opens if not cached
+  const url = (await chrome.tabs.get(tabId)).url;
+  if (!await isSummaryCached(url)) {
     working = true;
     updateSummary('Fetching summary...');
-    requestNewSummary();
-  });
+    const summary = await requestNewSummary();
+    await cacheSummary(url, summary);
+  } else {
+    const cachedSummary = await getCachedSummary(url);
+    if (cachedSummary) {
+      updateSummary(cachedSummary);
+    }
+  }
 });

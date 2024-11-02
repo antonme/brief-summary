@@ -19,13 +19,14 @@ connectSelectionSummarizer();
 // Fill in form input (context menu item)
 connectFormFiller();
 
+if (typeof browser == "undefined") {
+  // Chrome does not support the browser namespace yet.
+  globalThis.browser = chrome;
+}
+
 // Automatically upgrade the user's config if they are still using the old config format.
-chrome.runtime.onInstalled.addListener(async (details) => {
+browser.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install' || details.reason === 'update') {
     await setDefaultConfig();
-    await updateConfigToUseProfiles_20231117();
-    await updateModelNaming_20240129();
-    await updateModelNaming_20240423();
-    await updateProfileStructure_20240620();
   }
 });

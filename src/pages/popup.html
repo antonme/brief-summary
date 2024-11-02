@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <link rel="stylesheet" href="../../assets/bootstrap.min.css" />
+    <link rel="stylesheet" href="../styles/popup.css">
 
     <style>
       li {
@@ -30,21 +31,6 @@
       <div class="d-flex flex-wrap mb-1" id="profileContainer"></div>
     </div>
 
-    <div class="input-group input-group-sm mb-2">
-      <span class="input-group-text">Model</span>
-      <select id="model" name="model" class="form-select">
-        <option value="gpt-3.5-turbo">GPT 3.5 Turbo</option>
-        <option value="gpt-3.5-turbo-16k" selected>GPT 3.5 Turbo 16K</option>
-        <option value="gpt-4">GPT 4</option>
-        <option value="gpt-4-turbo">GPT 4 Turbo</option>
-        <option value="gpt-4o">GPT 4o</option>
-        <option value="gpt-4o-mini">GPT 4o Mini</option>
-      </select>
-    </div>
-
-    <div class="input-group input-group-sm mb-3">
-      <textarea id="instructions" class="hint form-control" rows="3"></textarea>
-    </div>
 
     <div class="input-group input-group-sm mb-3">
       <button id="summarize" class="btn btn-primary btn-sm" title="Summarize page">Summarize page</button>
