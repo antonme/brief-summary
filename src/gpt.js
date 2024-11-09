@@ -11,7 +11,7 @@ const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const ERR_ANTHROPIC_API_KEY = 'Error: Anthropic API key is not set';
 
 // Add new constants for Perplexity
-const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/v1/chat/completions';
+const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const ERR_PERPLEXITY_API_KEY = 'Error: Perplexity API key is not set';
 
 /*------------------------------------------------------------------------------
@@ -341,56 +341,15 @@ export async function fetchAndStream(port, messages, model, profileName) {
               }
             } else if (usePerplexityApi) {
               // Log the initial response
-              console.log('Perplexity Response:', response);
-              
-              if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Perplexity API Error:', errorData);
-                throw new Error(errorData.error?.message || 'Perplexity API request failed');
+              console.log('Response:', response);
+              console.log("Delta: ", parsed.choices[0].delta);
+
+              const content = parsed.choices[0]?.delta?.content || '';
+              if (content) {
+                summary += content;
+                gptMessage(port, summary);
               }
 
-              const reader = response.body.getReader();
-              const decoder = new TextDecoder();
-
-              try {
-                while (connected) {
-                  const { value, done } = await reader.read();
-                  if (done) break;
-
-                  const text = decoder.decode(value);
-                  console.log('Raw chunk:', text); // Debug log
-
-                  const lines = text.split('\n');
-                  for (const line of lines) {
-                    if (!line.trim()) continue;
-
-                    try {
-                      if (line.startsWith('data: ')) {
-                        const jsonStr = line.slice(6);
-                        if (jsonStr === '[DONE]') continue;
-                        
-                        const parsed = JSON.parse(jsonStr);
-                        const content = parsed.choices?.[0]?.delta?.content;
-                        if (content) {
-                          summary += content;
-                          gptMessage(port, summary);
-                        }
-                      }
-                    } catch (e) {
-                      console.log('Parse error on line:', line);
-                      continue;
-                    }
-                  }
-                }
-
-                if (summary) {
-                  gptDone(port, summary);
-                }
-                return;
-              } catch (e) {
-                console.error('Stream processing error:', e);
-                throw e;
-              }
             } else {
               // Handle OpenAI streaming format
               const content = parsed.choices[0]?.delta?.content || '';

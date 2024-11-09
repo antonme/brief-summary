@@ -1,500 +1,493 @@
-document.addEventListener('DOMContentLoaded', async function () {
-  const query = new URLSearchParams(window.location.search);
-  let tabId = query.get('tabId');  // Retrieve the tabId from URL parameters
+document.addEventListener('DOMContentLoaded',
+    async function () {
+      const query = new URLSearchParams(window.location.search);
+      let tabId = query.get('tabId');  // Retrieve the tabId from URL parameters
 
-  if (!tabId) {
-    // If no tabId is found in the URL, default to the current active tab
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabId = tabs[0].id;
-  }
-
-  const target = document.getElementById('summary');
-  const modelDropdown = document.getElementById('model');
-  const profileContainer = document.getElementById('profileContainer');
-
-  //----------------------------------------------------------------------------
-  // Mobile device detection
-  //----------------------------------------------------------------------------
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
-  const isMobileUserAgent = /Mobi|Android/i.test(navigator.userAgent);
-  const isSmallScreen = screen.width < 768;
-  const isMobile = isTouchDevice && (isMobileUserAgent || isSmallScreen);
-
-  //----------------------------------------------------------------------------
-  // Tab ID
-  //----------------------------------------------------------------------------
-
-  // Assigns the tabId to the new window link, so that when you open the popup
-  // in a new window, the new window will have the same tabId.
-  document.getElementById('newWindow').addEventListener('click', async () => {
-    if (tabId === undefined) {
-      // Ensure tabId is defined, if not, fetch it again
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      tabId = tabs[0].id;
-    }
-    chrome.tabs.create({ url: `src/pages/popup.html?tabId=${tabId}` });
-  });
-
-  // Returns the URL of the original tab, identified by the global tabId.
-  async function getOriginalTabUrl() {
-    const tab = await chrome.tabs.get(tabId);
-    return tab.url;
-  }
-
-  //----------------------------------------------------------------------------
-  // Copy summary to clipboard
-  //----------------------------------------------------------------------------
-  const copySummaryButton = document.getElementById('copySummary');
-  const summarizeButton = document.getElementById('summarize');
-
-
-  function enableCopyButton() {
-    copySummaryButton.classList.remove('btn-outline-secondary');
-    copySummaryButton.classList.add('btn-outline-primary');
-    copySummaryButton.disabled = false;
-  }
-
-  function disableCopyButton() {
-    copySummaryButton.classList.remove('btn-outline-primary');
-    copySummaryButton.classList.add('btn-outline-secondary');
-    copySummaryButton.disabled = true;
-  }
-
-  window.setInterval(() => {
-    if (lastMessage) {
-      enableCopyButton();
-    } else {
-      disableCopyButton();
-    }
-  }, 500);
-
-  copySummaryButton.addEventListener('click', async () => {
-    if (lastMessage) {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const urlOfPage = tabs[0].url;
-      const formattedText = `Summary of ${urlOfPage}:\n\n${lastMessage}`;
-
-      try {
-        await navigator.clipboard.writeText(formattedText);
-      } catch (err) {
-        console.error('Failed to copy text: ', err);
+      if (!tabId) {
+        // If no tabId is found in the URL, default to the current active tab
+        const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+        tabId = tabs[0].id;
       }
-    }
-  });
 
-  summarizeButton.addEventListener('click', async () => {
-    working = true;
-    updateSummary('Fetching summary...');
-    const summary = await requestNewSummary();
-    await cacheSummary(url, summary);
-  });
+      const target = document.getElementById('summary');
+      const profileContainer = document.getElementById('profileContainer');
 
-  //----------------------------------------------------------------------------
-  // Display the header when in full screen mode, including the URL of the
-  // current page. This is only necessary when the popup is opened in a new
-  // tab, which is the case when the user clicks the "open in new window" icon,
-  // or when the popup is opened on a mobile device (kiwi browser displays
-  // extension popups as full screen tabs).
-  //----------------------------------------------------------------------------
-  async function displayHeader() {
-    document.getElementById('header').classList.remove('visually-hidden');
-    document.getElementById('sourceUrl').href = (await chrome.tabs.get(tabId)).url;
-  }
+      //----------------------------------------------------------------------------
+      // Mobile device detection
+      //----------------------------------------------------------------------------
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
+      const isMobileUserAgent = /Mobi|Android/i.test(navigator.userAgent);
+      const isSmallScreen = screen.width < 768;
+      const isMobile = isTouchDevice && (isMobileUserAgent || isSmallScreen);
 
-  if (query.has('tabId') || isMobile) {
-    displayHeader();
-  }
+      //----------------------------------------------------------------------------
+      // Tab ID
+      //----------------------------------------------------------------------------
 
-  //----------------------------------------------------------------------------
-  // Port management
-  //----------------------------------------------------------------------------
-  let port;
-  let portIsConnected = false;
 
-  function connectPort() {
-    port = chrome.runtime.connect({ name: 'summarize' });
-    portIsConnected = true;
+      // Returns the URL of the original tab, identified by the global tabId.
+      async function getOriginalTabUrl() {
+          console.log("tabId", tabId);
+          const tab = await chrome.tabs.get(tabId);
+          console.log("tab.url", tab.url);
+        return tab.url;
+      }
 
-    // Attach the message listener
-    port.onMessage.addListener(onMessage);
+      //----------------------------------------------------------------------------
+      // Copy summary to clipboard
+      //----------------------------------------------------------------------------
+      const copySummaryButton = document.getElementById('copySummary');
+      const summarizeButton = document.getElementById('summarize');
 
-    // If the port disconnects, try to reconnect once after a short delay.
-    port.onDisconnect.addListener(() => {
-      portIsConnected = false;
-      setTimeout(connectPort);
-    });
-  }
 
-  function postMessage(msg) {
-    if (!portIsConnected) {
+      function enableCopyButton() {
+        copySummaryButton.classList.remove('btn-outline-secondary');
+        copySummaryButton.classList.add('btn-outline-primary');
+        copySummaryButton.disabled = false;
+      }
+
+      function disableCopyButton() {
+        copySummaryButton.classList.remove('btn-outline-primary');
+        copySummaryButton.classList.add('btn-outline-secondary');
+        copySummaryButton.disabled = true;
+      }
+
+      window.setInterval(() => {
+        if (lastMessage) {
+          enableCopyButton();
+        } else {
+          disableCopyButton();
+        }
+      }, 500);
+
+      copySummaryButton.addEventListener('click', async () => {
+        if (lastMessage) {
+          const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+          const urlOfPage = tabs[0].url;
+          const formattedText = `Summary of ${urlOfPage}:\n\n${lastMessage}`;
+
+          try {
+            await navigator.clipboard.writeText(formattedText);
+          } catch (err) {
+            console.error('Failed to copy text: ', err);
+          }
+        }
+      });
+
+      summarizeButton.addEventListener('click', async () => {
+        working = true;
+        updateSummary('Fetching summary...');
+        const summary = await requestNewSummary();
+        await cacheSummary(url, summary);
+      });
+
+      //----------------------------------------------------------------------------
+      // Display the header when in full screen mode, including the URL of the
+      // current page. This is only necessary when the popup is opened in a new
+      // tab, which is the case when the user clicks the "open in new window" icon,
+      // or when the popup is opened on a mobile device (kiwi browser displays
+      // extension popups as full screen tabs).
+      //----------------------------------------------------------------------------
+      async function displayHeader() {
+        //document.getElementById('header').classList.remove('visually-hidden');
+        //document.getElementById('sourceUrl').href = (await chrome.tabs.get(tabId)).url;
+      }
+
+      if (query.has('tabId') || isMobile) {
+        displayHeader();
+      }
+
+      //----------------------------------------------------------------------------
+      // Port management
+      //----------------------------------------------------------------------------
+      let port;
+      let portIsConnected = false;
+
+      function connectPort() {
+        port = chrome.runtime.connect({name: 'summarize'});
+        portIsConnected = true;
+
+        // Attach the message listener
+        port.onMessage.addListener(onMessage);
+
+        // If the port disconnects, try to reconnect once after a short delay.
+        port.onDisconnect.addListener(() => {
+          portIsConnected = false;
+          setTimeout(connectPort);
+        });
+      }
+
+      function postMessage(msg) {
+        if (!portIsConnected) {
+          connectPort();
+        }
+
+        port.postMessage(msg);
+      }
+
       connectPort();
-    }
 
-    port.postMessage(msg);
-  }
+      // Send regular "keep-alive" messages to the background script to ensure it
+      // continues running for as long as the user keeps the popup open.
+      setInterval(() => {
+        postMessage({action: 'KEEP_ALIVE'});
+      }, 1000);
 
-  connectPort();
+      //----------------------------------------------------------------------------
+      // Message listener
+      //----------------------------------------------------------------------------
+      let lastMessage = null;
 
-  // Send regular "keep-alive" messages to the background script to ensure it
-  // continues running for as long as the user keeps the popup open.
-  setInterval(() => {
-    postMessage({ action: 'KEEP_ALIVE' });
-  }, 1000);
+      async function onMessage(msg) {
+        if (msg == null) {
+          return;
+        }
 
-  //----------------------------------------------------------------------------
-  // Message listener
-  //----------------------------------------------------------------------------
-  let lastMessage = null;
+        switch (msg.action) {
+          case 'GPT_MESSAGE':
+            lastMessage = msg.summary;
+            updateSummary(format(msg.summary));
+            break;
 
-  async function onMessage(msg) {
-    if (msg == null) {
-      return;
-    }
+          case 'GPT_DONE':
+            const model=msg.model;
+            setSummary(lastMessage, model);
+            working = false;
+            break;
 
-    switch (msg.action) {
-      case 'GPT_MESSAGE':
-        lastMessage = msg.summary;
-        updateSummary(format(msg.summary));
-        break;
+          case 'GPT_ERROR':
+            reportError(msg.error);
+            working = false;
+            break;
 
-      case 'GPT_DONE':
-        const model = await getModel();
-        setSummary(lastMessage, model);
-        working = false;
-        break;
+          default:
+            reportError('Failed to fetch summary.');
+            working = false;
+            break;
+        }
+      }
 
-      case 'GPT_ERROR':
-        reportError(msg.error);
-        working = false;
-        break;
+      //----------------------------------------------------------------------------
+      // Display error messages from the background script.
+      //----------------------------------------------------------------------------
+      function reportError(msg) {
+        document.getElementById('errors').innerHTML = [
+          `<div class="alert alert-danger alert-dismissible fadee" role="alert">`,
+          `   <div>${msg}</div>`,
+          '   <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>',
+          '</div>',
+        ].join('');
+      }
 
-      default:
-        reportError('Failed to fetch summary.');
-        working = false;
-        break;
-    }
-  }
+      //----------------------------------------------------------------------------
+      // Controlling the popup window size is a real pain in extensions. This
+      // function attempts to set the window size to 'auto' on small screen
+      // devices, like mobile browsers, where the popup is likely to have been
+      // opened in a full screen tab (as is the case with Kiwi). On larger screens,
+      // the popup is set to a fixed size of 600px x 600px.
+      //----------------------------------------------------------------------------
+      function setWindowSize() {
+        if (isMobile) {
+          document.body.style.width = 'auto';
+          document.body.style.height = 'auto';
+        } else {
+          const width = Math.min(780, Math.round(screen.width * 0.6 * 0.1) * 10);
+          const height = 900
+          document.body.style.width = `${width}px`;
+          document.body.style.height = `${height}px`;
+        }
+      }
 
-  //----------------------------------------------------------------------------
-  // Display error messages from the background script.
-  //----------------------------------------------------------------------------
-  function reportError(msg) {
-    document.getElementById('errors').innerHTML = [
-      `<div class="alert alert-danger alert-dismissible fadee" role="alert">`,
-      `   <div>${msg}</div>`,
-      '   <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>',
-      '</div>',
-    ].join('');
-  }
+      setWindowSize();
 
-  //----------------------------------------------------------------------------
-  // Controlling the popup window size is a real pain in extensions. This
-  // function attempts to set the window size to 'auto' on small screen
-  // devices, like mobile browsers, where the popup is likely to have been
-  // opened in a full screen tab (as is the case with Kiwi). On larger screens,
-  // the popup is set to a fixed size of 600px x 600px.
-  //----------------------------------------------------------------------------
-  function setWindowSize() {
-    if (isMobile) {
-      document.body.style.width = 'auto';
-      document.body.style.height = 'auto';
-    } else {
-      const width = Math.min(780, Math.round(screen.width * 0.6 * 0.1) * 10);
-      const height = 900
-      document.body.style.width = `${width}px`;
-      document.body.style.height = `${height}px`;
-    }
-  }
+      //----------------------------------------------------------------------------
+      // Extracting text from PDF files
+      //----------------------------------------------------------------------------
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '../assets/pdf.worker.mjs';
 
-  setWindowSize();
+      async function extractTextFromPDF(url) {
+        const pdf = await pdfjsLib.getDocument(url).promise;
+        let content = '';
 
-  //----------------------------------------------------------------------------
-  // Extracting text from PDF files
-  //----------------------------------------------------------------------------
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '../assets/pdf.worker.mjs';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const text = await page.getTextContent();
+          content += text.items.map((item) => item.str).join(' ');
+        }
 
-  async function extractTextFromPDF(url) {
-    const pdf = await pdfjsLib.getDocument(url).promise;
-    let content = '';
+        return content;
+      }
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const text = await page.getTextContent();
-      content += text.items.map((item) => item.str).join(' ');
-    }
+      function isPDF(url) {
+        return url.toLowerCase().endsWith('.pdf');
+      }
 
-    return content;
-  }
+      //----------------------------------------------------------------------------
+      // Extracting text from anything supported
+      //----------------------------------------------------------------------------
+      async function getReferenceText() {
+        const url = (await chrome.tabs.get(tabId)).url;
 
-  function isPDF(url) {
-    return url.toLowerCase().endsWith('.pdf');
-  }
+        if (isPDF(url)) {
+          return extractTextFromPDF(url);
+        } else {
+          return new Promise((resolve, reject) => {
+            chrome.scripting.executeScript(
+                {
+                  target: {tabId},
+                  func: () => document.body.innerText,
+                },
+                (results) => {
+                  if (results === undefined || results.length === 0) {
+                    reject('Unable to retrieve page contents or page contents are empty.');
+                  }
 
-  //----------------------------------------------------------------------------
-  // Extracting text from anything supported
-  //----------------------------------------------------------------------------
-  async function getReferenceText() {
-    const url = (await chrome.tabs.get(tabId)).url;
+                  if (results[0].result === undefined || results[0].result === '') {
+                    reject('Unable to retrieve page contents or page contents are empty.');
+                  }
 
-    if (isPDF(url)) {
-      return extractTextFromPDF(url);
-    } else {
-      return new Promise((resolve, reject) => {
-        chrome.scripting.executeScript(
-          {
-            target: { tabId },
-            func: () => document.body.innerText,
-          },
-          (results) => {
-            if (results === undefined || results.length == 0) {
-              reject('Unable to retrieve page contents or page contents are empty.');
-            }
+                  resolve(results[0].result);
+                },
+            );
+          });
+        }
+      }
 
-            if (results[0].result === undefined || results[0].result == '') {
-              reject('Unable to retrieve page contents or page contents are empty.');
-            }
-
-            resolve(results[0].result);
-          },
-        );
-      });
-    }
-  }
-
-  //----------------------------------------------------------------------------
-  // Powers the button that opens the options page
-  //----------------------------------------------------------------------------
-  document.getElementById('options').addEventListener('click', function () {
-    chrome.runtime.openOptionsPage();
-  });
-
-
-  //----------------------------------------------------------------------------
-  // powers the profile dropdown
-  //----------------------------------------------------------------------------
-  const noProfilesMessage =
-    'No profiles found. Use the gear icon above or right-click the extension ' +
-    'icon and select "Options" to create a profile.';
-
-  let currentProfile = '';
-
-  // Update profile button UI and event listeners
-  async function loadProfiles() {
-    const [{ defaultProfile, profiles }, { lastUsedProfile }] = await Promise.all([
-      chrome.storage.sync.get(['defaultProfile', 'profiles']),
-      chrome.storage.local.get(['lastUsedProfile']),
-    ]);
-
-    if (!profiles) {
-      reportError(noProfilesMessage);
-      return;
-    }
-
-    const sortedProfiles = profiles.sort((a, b) => {
-      if (a === defaultProfile) return -1;
-      if (b === defaultProfile) return 1;
-      return a.localeCompare(b);
-    });
-
-    // Clear existing buttons
-    profileContainer.innerHTML = '';
-
-    sortedProfiles.forEach(async (profileName) => {
-      const button = document.createElement('button');
-      button.className = 'profile-button btn btn-sm btn-outline-secondary text-nowrap';
-      button.textContent = profileName;
-
-      // Add click event listener for profile buttons
-      button.addEventListener('click', async () => {
-        await selectProfile(profileName);
+      //----------------------------------------------------------------------------
+      // Powers the button that opens the options page
+      //----------------------------------------------------------------------------
+      document.getElementById('options').addEventListener('click', function () {
+        chrome.runtime.openOptionsPage();
       });
 
-      profileContainer.appendChild(button);
 
-      if (profileName === lastUsedProfile) {
-        const profileKey = `profile__${profileName}`;
+      //----------------------------------------------------------------------------
+      // powers the profile dropdown
+      //----------------------------------------------------------------------------
+      const noProfilesMessage =
+          'No profiles found. Use the gear icon above or right-click the extension ' +
+          'icon and select "Options" to create a profile.';
+
+      let currentProfile = '';
+
+      // Update profile button UI and event listeners
+      async function loadProfiles() {
+        const [{defaultProfile, profiles}, {lastUsedProfile}] = await Promise.all([
+          chrome.storage.sync.get(['defaultProfile', 'profiles']),
+          chrome.storage.local.get(['lastUsedProfile']),
+        ]);
+
+        if (!profiles) {
+          reportError(noProfilesMessage);
+          return;
+        }
+
+        const sortedProfiles = profiles.sort((a, b) => {
+          if (a === defaultProfile) return -1;
+          if (b === defaultProfile) return 1;
+          return a.localeCompare(b);
+        });
+
+        // Clear existing buttons
+        profileContainer.innerHTML = '';
+
+        sortedProfiles.forEach(async (profileName) => {
+          const button = document.createElement('button');
+          button.className = 'profile-button btn btn-sm btn-outline-secondary text-nowrap';
+          button.textContent = profileName;
+
+          // Add click event listener for profile buttons
+          button.addEventListener('click', async () => {
+            await selectProfile(profileName);
+          });
+
+          profileContainer.appendChild(button);
+
+          if (profileName === lastUsedProfile) {
+            const profileKey = `profile__${profileName}`;
+            const profileData = await chrome.storage.sync.get(profileKey);
+          }
+        });
+
+        // Automatically select a profile if necessary
+        if (lastUsedProfile) {
+          await selectProfile(lastUsedProfile);
+        } else if (defaultProfile) {
+          await selectProfile(defaultProfile);
+        }
+      }
+
+      // Update the model and instructions when the profile changes
+      async function selectProfile(selectedProfileName) {
+        currentProfile = selectedProfileName;
+
+        // Update the active profile button classes
+        const buttons = profileContainer.getElementsByClassName('btn');
+
+        for (const button of buttons) {
+          if (button.textContent === currentProfile) {
+            button.className = 'btn btn-sm m-1 text-nowrap btn-outline-primary active';
+          } else {
+            button.className = 'btn btn-sm m-1 text-nowrap btn-outline-secondary';
+          }
+        }
+
+        // Save the selected profile name locally
+        await chrome.storage.local.set({lastUsedProfile: selectedProfileName});
+
+        const profileKey = `profile__${selectedProfileName}`;
         const profileData = await chrome.storage.sync.get(profileKey);
       }
-    });
 
-    // Automatically select a profile if necessary
-    if (lastUsedProfile) {
-      await selectProfile(lastUsedProfile);
-    } else if (defaultProfile) {
-      await selectProfile(defaultProfile);
-    }
-  }
+      // Initial call to load profiles
+      await loadProfiles();
 
-  // Update the model and instructions when the profile changes
-  async function selectProfile(selectedProfileName) {
-    currentProfile = selectedProfileName;
+      // Update profile when the selector changes
+      //profileSelector.addEventListener('change', selectProfile);
 
-    // Update the active profile button classes
-    const buttons = profileContainer.getElementsByClassName('btn');
+      //----------------------------------------------------------------------------
+      // Autoscroll to the bottom of the page when new content is added. If the
+      // user scrolls up, disable autoscroll until they scroll back to the bottom.
+      //----------------------------------------------------------------------------
+      let autoScroll = false;
 
-    for (const button of buttons) {
-      if (button.textContent === currentProfile) {
-        button.className = 'btn btn-sm m-1 text-nowrap btn-outline-primary active';
-      } else {
-        button.className = 'btn btn-sm m-1 text-nowrap btn-outline-secondary';
-      }
-    }
+      window.addEventListener('scroll', () => {
+        const {scrollHeight, scrollTop, clientHeight} = document.documentElement;
+        autoScroll = Math.abs(scrollHeight - scrollTop - clientHeight) < 10;
+      });
 
-    // Save the selected profile name locally
-    await chrome.storage.local.set({ lastUsedProfile: selectedProfileName });
+      function format(text) {
+        if (text == null || text.length === 0) {
+          return '';
+        }
 
-    const profileKey = `profile__${selectedProfileName}`;
-    const profileData = await chrome.storage.sync.get(profileKey);
-  }
-
-  // Initial call to load profiles
-  await loadProfiles();
-
-  // Update profile when the selector changes
-  //profileSelector.addEventListener('change', selectProfile);
-
-  //----------------------------------------------------------------------------
-  // Autoscroll to the bottom of the page when new content is added. If the
-  // user scrolls up, disable autoscroll until they scroll back to the bottom.
-  //----------------------------------------------------------------------------
-  let autoScroll = false;
-
-  window.addEventListener('scroll', () => {
-    const { scrollHeight, scrollTop, clientHeight } = document.documentElement;
-    autoScroll = Math.abs(scrollHeight - scrollTop - clientHeight) < 10;
-  });
-
-  function format(text) {
-    if (text == null || text.length == 0) {
-      return '';
-    }
-
-    return marked.marked(text);
-  }
-
-  async function restoreSummary() {
-    const url = await getOriginalTabUrl();
-    const config = await chrome.storage.local.get('results');
-
-    if (config.results && config.results[url]) {
-      const result = config.results[url];
-
-      // Check if the result is a string (old format) or an object (new format)
-      if (typeof result === 'string') {
-        return { summary: result, model: config.model }; // Convert to new format for consistency
+        return marked.marked(text);
       }
 
-      // It's already in the new format (object with model and summary)
-      return result;
-    } else {
-      return null;
-    }
-  }
+      async function restoreSummary() {
+        const url = await getOriginalTabUrl();
+        const config = await chrome.storage.local.get('results');
 
-  async function setSummary(summary, model) {
-    const url = await getOriginalTabUrl();
-    const config = await chrome.storage.local.get('results');
+        if (config.results && config.results[url]) {
+          const result = config.results[url];
 
-    let results = config.results || {};
-    results[url] = { model: model, summary: summary };
-    chrome.storage.local.set({ results: results });
-  }
+          // Check if the result is a string (old format) or an object (new format)
+          if (typeof result === 'string') {
+            return {summary: result, model: config.model}; // Convert to new format for consistency
+          }
 
-  function updateSummary(message) {
-    requestAnimationFrame(() => {
-      document.getElementById('summaryCard').classList.remove('visually-hidden');
-
-      target.innerHTML = message;
-
-      // Autoscroll to the bottom of the page
-      if (autoScroll) {
-        window.scrollTo(0, document.body.scrollHeight);
+          // It's already in the new format (object with model and summary)
+          return result;
+        } else {
+          return null;
+        }
       }
-    });
-  }
 
-  function clearSummary() {
-    requestAnimationFrame(() => {
-      document.getElementById('summaryCard').classList.add('visually-hidden');
-      target.innerHTML = '';
-    });
-  }
+      async function setSummary(summary, model) {
+        const url = await getOriginalTabUrl();
+        const config = await chrome.storage.local.get('results');
 
-  async function requestNewSummary() {
-    const content = await getReferenceText()
-      .then((text) => {
-        postMessage({
-          action: 'SUMMARIZE',
-          profile: currentProfile,
-          content: text,
+        let results = config.results || {};
+        results[url] = {model: model, summary: summary};
+        chrome.storage.local.set({results: results});
+      }
+
+      function updateSummary(message) {
+        requestAnimationFrame(() => {
+          document.getElementById('summaryCard').classList.remove('visually-hidden');
+
+          target.innerHTML = message;
+
+          // Autoscroll to the bottom of the page
+          if (autoScroll) {
+            window.scrollTo(0, document.body.scrollHeight);
+          }
         });
-      })
-      .catch((error) => {
-        reportError(error);
-        clearSummary();
-        working = false;
+      }
+
+      function clearSummary() {
+        requestAnimationFrame(() => {
+          document.getElementById('summaryCard').classList.add('visually-hidden');
+          target.innerHTML = '';
+        });
+      }
+
+      async function requestNewSummary() {
+        const content = await getReferenceText()
+            .then((text) => {
+              postMessage({
+                action: 'SUMMARIZE',
+                profile: currentProfile,
+                content: text,
+              });
+            })
+            .catch((error) => {
+              reportError(error);
+              clearSummary();
+              working = false;
+            });
+      }
+
+      // Restore the last page summary when the popup is opened
+      restoreSummary().then((result) => {
+        if (result != null) {
+
+          updateSummary(marked.marked(result.summary));
+
+          lastMessage = result.summary;
+
+          // When restoring a summary, force the page to scroll to the top
+          requestAnimationFrame(() => {
+            window.scrollTo(0, 0);
+          });
+        }
       });
-  }
 
-  // Restore the last page summary when the popup is opened
-  restoreSummary().then((result) => {
-    if (result != null) {
+      // Flag to prevent multiple clicks
+      let working = false;
 
-      updateSummary(marked.marked(result.summary));
+      // Function to check if a summary is already cached
+      async function isSummaryCached(url) {
+        if (typeof caches === "undefined") return false;
 
-      lastMessage = result.summary;
+        const cache = await caches.open('summary-cache');
+        const cachedResponse = await cache.match(url);
+        return cachedResponse !== undefined;
+      }
 
-      // When restoring a summary, force the page to scroll to the top
-      requestAnimationFrame(() => {
-        window.scrollTo(0, 0);
-      });
-    }
-  });
+      // Function to get the cached summary
+      async function getCachedSummary(url) {
+        const cache = await caches.open('summary-cache');
+        const cachedResponse = await cache.match(url);
+        console.log("url", url);
+        console.log("cachedResponse", cachedResponse.text());
+        if (cachedResponse) {
+          return cachedResponse.text();
+        }
+        return null;
+      }
 
-  // Flag to prevent multiple clicks
-  let working = false;
+      // Function to cache the summary
+      async function cacheSummary(url, summary) {
+        const cache = await caches.open('summary-cache');
+        const response = new Response(summary, {
+          headers: {'Content-Type': 'text/plain'}
+        });
+        await cache.put(url, response);
+        console.log('Cache put:', url, summary)
+      }
 
-  // Function to check if a summary is already cached
-  async function isSummaryCached(url) {
-    if (typeof caches === "undefined") return false;
-
-    const cache = await caches.open('summary-cache');
-    const cachedResponse = await cache.match(url);
-    return cachedResponse !== undefined;
-  }
-
-  // Function to get the cached summary
-  async function getCachedSummary(url) {
-    const cache = await caches.open('summary-cache');
-    const cachedResponse = await cache.match(url);
-    console.log("url", url);
-    console.log("cachedResponse", cachedResponse.text());
-    if (cachedResponse) {
-      return cachedResponse.text();
-    }
-    return null;
-  }
-
-  // Function to cache the summary
-  async function cacheSummary(url, summary) {
-    const cache = await caches.open('summary-cache');
-    const response = new Response(summary, {
-      headers: { 'Content-Type': 'text/plain' }
+      // Automatically start summarization when the popup opens if not cached
+      const url = await getOriginalTabUrl();
+      if (!await isSummaryCached(url)) {
+        working = true;
+        updateSummary('Fetching summary...');
+        const summary = await requestNewSummary();
+        await cacheSummary(url, summary);
+      } else {
+        const cachedSummary = await getCachedSummary(url);
+        if (cachedSummary) {
+          updateSummary(cachedSummary);
+        }
+      }
     });
-    await cache.put(url, response);
-  }
-
-  // Automatically start summarization when the popup opens if not cached
-  const url = (await chrome.tabs.get(tabId)).url;
-  if (!await isSummaryCached(url)) {
-    working = true;
-    updateSummary('Fetching summary...');
-    const summary = await requestNewSummary();
-    await cacheSummary(url, summary);
-  } else {
-    const cachedSummary = await getCachedSummary(url);
-    if (cachedSummary) {
-      updateSummary(cachedSummary);
-    }
-  }
-});
