@@ -1,0 +1,21 @@
+blockquote {
+    margin-left: 1.5em;
+    padding-left: 1em;
+    border-left: 3px solid #e0e0e0;
+    color: #555;
+    font-style: italic;
+}
+
+/* Nested blockquotes - each level indents further */
+blockquote blockquote {
+    margin-left: 1em;
+    border-left-color: #f0f0f0;
+} 
+
+li {
+    margin-bottom: 0.5em;
+  }
+  
+  #summary {
+    font-family: 'Fira Sans', sans-serif;
+  }
