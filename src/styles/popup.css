@@ -15,7 +15,43 @@ blockquote blockquote {
 li {
     margin-bottom: 0.5em;
   }
-  
+
   #summary {
     font-family: 'Fira Sans', sans-serif;
   }
+
+/* Thinking mode styles */
+
+/* Grayed thinking text during streaming */
+.thinking-text {
+  color: #6c757d;
+  font-style: italic;
+  font-size: 0.9em;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-left: 3px solid #adb5bd;
+  border-radius: 0.25rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Collapsed thinking content */
+.thinking-text-collapsed {
+  color: #6c757d;
+  font-style: italic;
+  font-size: 0.85em;
+  background-color: #f8f9fa;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Hover effect for thinking toggle button */
+button[data-bs-target="#thinkingExpanded"]:hover {
+  color: #495057 !important;
+}

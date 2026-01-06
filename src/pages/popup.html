@@ -27,6 +27,28 @@
     <div id="errors"></div>
     <div id="summaryCard" class="card mb-3 text-bg-light visually-hidden">
       <div class="card-body">
+        <!-- Thinking section (initially hidden) -->
+        <div id="thinkingSection" class="visually-hidden">
+          <!-- Streaming thinking (visible during thinking) -->
+          <div id="thinkingContent" class="thinking-text"></div>
+
+          <!-- Collapsed toggle (shown after thinking completes) -->
+          <div id="thinkingCollapsed" class="visually-hidden">
+            <button class="btn btn-sm btn-link text-muted text-decoration-none p-0 mb-2"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#thinkingExpanded"
+                    aria-expanded="false"
+                    aria-controls="thinkingExpanded">
+              🧠 Thinking process (click to expand)
+            </button>
+            <div class="collapse" id="thinkingExpanded">
+              <div class="thinking-text-collapsed p-2 mb-2 border rounded"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main summary output -->
         <div id="summary"></div>
       </div>
     </div>

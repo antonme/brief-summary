@@ -208,6 +208,11 @@ function gptMessage(port, summary) {
   port.postMessage({ action: 'GPT_MESSAGE', summary: summary });
 }
 
+function gptThinking(port, thinking) {
+  console.log('Sending thinking:', thinking.slice(-50)); // Log last 50 chars
+  port.postMessage({ action: 'GPT_THINKING', thinking: thinking });
+}
+
 function gptDone(port, summary) {
   console.log('Sending done signal');
   port.postMessage({ action: 'GPT_DONE', summary: summary });
@@ -284,7 +289,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }],
       system: systemMessage,
       stream: true,
-      max_tokens: 4096
+      max_tokens: 16000,
+      // Enable extended thinking for supported Claude models
+      thinking: {
+        type: "enabled",
+        budget_tokens: 10000  // Minimum 1024, allows substantial reasoning
+      }
     };
   } else if (usePerplexityApi) {
     // Format payload for Perplexity API with web search (built-in)
@@ -317,7 +327,14 @@ export async function fetchAndStream(port, messages, model, profileName) {
       contents: contents,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 8192
+        maxOutputTokens: 8192,
+        // Enable thinking mode for Gemini 2.5+ and Gemini 3+ models
+        thinkingConfig: {
+          // Using dynamic thinking budget (-1) which adjusts based on complexity
+          thinkingBudget: -1,
+          // CRITICAL: Must set includeThoughts to true to receive thinking content in streaming responses
+          includeThoughts: true
+        }
       },
       // Add Google Search grounding tool
       tools: [{
@@ -388,6 +405,11 @@ export async function fetchAndStream(port, messages, model, profileName) {
     let buffer = '';
     let summary = '';
 
+    // State tracking for thinking vs. output content
+    let thinkingBuffer = '';
+    let outputBuffer = '';
+    let currentBlockType = null;
+
     while (connected) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -405,20 +427,68 @@ export async function fetchAndStream(port, messages, model, profileName) {
           try {
             const parsed = JSON.parse(data);
             if (useAnthropicApi) {
-              // Handle Anthropic streaming format
-              const content = parsed.delta?.text || '';
-              if (content) {
-                summary += content;
-                gptMessage(port, summary);
+              // Handle Anthropic streaming format with thinking tokens
+              if (parsed.type === 'content_block_start') {
+                currentBlockType = parsed.content_block?.type;
+                console.log('Starting content block:', currentBlockType);
+              }
+              else if (parsed.type === 'content_block_delta') {
+                const deltaType = parsed.delta?.type;
+
+                if (deltaType === 'thinking_delta') {
+                  // Accumulate thinking content
+                  const thinkingText = parsed.delta.thinking || '';
+                  thinkingBuffer += thinkingText;
+                  summary += thinkingText;  // For backward compatibility
+                  gptThinking(port, thinkingBuffer);
+                }
+                else if (deltaType === 'text_delta') {
+                  // Accumulate output content
+                  const textContent = parsed.delta.text || '';
+                  outputBuffer += textContent;
+                  summary += textContent;  // For backward compatibility
+                  gptMessage(port, outputBuffer);
+                }
+                // Ignore signature_delta - just for verification
+              }
+              else if (parsed.type === 'content_block_stop') {
+                console.log('Finished content block:', currentBlockType);
+                currentBlockType = null;
               }
             } else if (useGoogleApi) {
-              // Handle Google Gemini streaming format
-              // Gemini format: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
+              // Handle Google Gemini streaming format with thinking tokens
+              // Gemini format: { candidates: [{ content: { parts: [{ text: "...", thought: bool }] } }] }
               const candidate = parsed.candidates?.[0];
-              const content = candidate?.content?.parts?.[0]?.text || '';
-              if (content) {
-                summary += content;
-                gptMessage(port, summary);
+              const parts = candidate?.content?.parts || [];
+
+              // Debug logging for Gemini responses
+              if (parts.length > 0) {
+                console.log('Gemini parts received:', parts.map(p => ({
+                  hasText: !!p.text,
+                  textLength: p.text?.length || 0,
+                  thought: p.thought
+                })));
+              }
+
+              // Process all parts in this chunk
+              for (const part of parts) {
+                const text = part.text || '';
+                if (!text) continue;
+
+                // Check if this is thinking or output based on thought boolean
+                if (part.thought === true) {
+                  // This is thinking content
+                  console.log('Gemini thinking detected:', text.substring(0, 50) + '...');
+                  thinkingBuffer += text;
+                  summary += text;  // For backward compatibility
+                  gptThinking(port, thinkingBuffer);
+                } else {
+                  // This is regular output (thought === false or undefined)
+                  console.log('Gemini output detected:', text.substring(0, 50) + '...');
+                  outputBuffer += text;
+                  summary += text;  // For backward compatibility
+                  gptMessage(port, outputBuffer);
+                }
               }
 
               // Check for grounding metadata (search results)
@@ -457,8 +527,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }
     }
 
-    if (summary) {
-      gptDone(port, summary);
+    // Send done message with output buffer (or full summary for backward compatibility)
+    const finalContent = outputBuffer || summary;
+    if (finalContent) {
+      gptDone(port, finalContent);
     } else {
       throw new Error('No content received from API');
     }

@@ -137,6 +137,8 @@ document.addEventListener('DOMContentLoaded',
       // Message listener
       //----------------------------------------------------------------------------
       let lastMessage = null;
+      let lastThinking = null;
+      let isThinkingComplete = false;
 
       async function onMessage(msg) {
         if (msg == null) {
@@ -144,8 +146,23 @@ document.addEventListener('DOMContentLoaded',
         }
 
         switch (msg.action) {
+          case 'GPT_THINKING':
+            // Thinking content is streaming
+            lastThinking = msg.thinking;
+            updateThinking(msg.thinking);
+            break;
+
           case 'GPT_MESSAGE':
+            // Main output content is streaming
             lastMessage = msg.summary;
+
+            // If we have thinking content and this is the first message,
+            // collapse the thinking section
+            if (lastThinking && !isThinkingComplete) {
+              collapseThinking();
+              isThinkingComplete = true;
+            }
+
             updateSummary(format(msg.summary));
             break;
 
@@ -153,11 +170,18 @@ document.addEventListener('DOMContentLoaded',
             const model=msg.model;
             setSummary(lastMessage, model);
             working = false;
+
+            // Reset thinking state for next request
+            isThinkingComplete = false;
             break;
 
           case 'GPT_ERROR':
             reportError(msg.error);
             working = false;
+
+            // Reset thinking state on error
+            clearThinking();
+            isThinkingComplete = false;
             break;
 
           default:
@@ -405,14 +429,77 @@ document.addEventListener('DOMContentLoaded',
         });
       }
 
+      //----------------------------------------------------------------------------
+      // Thinking mode functions
+      //----------------------------------------------------------------------------
+      function updateThinking(thinkingText) {
+        requestAnimationFrame(() => {
+          const thinkingSection = document.getElementById('thinkingSection');
+          const thinkingContent = document.getElementById('thinkingContent');
+
+          // Show the thinking section
+          thinkingSection.classList.remove('visually-hidden');
+
+          // Update the streaming content (formatted as markdown)
+          thinkingContent.innerHTML = format(thinkingText);
+
+          // Auto-scroll the thinking container to bottom to show latest thinking
+          thinkingContent.scrollTop = thinkingContent.scrollHeight;
+
+          // Autoscroll to the bottom of the page
+          if (autoScroll) {
+            window.scrollTo(0, document.body.scrollHeight);
+          }
+        });
+      }
+
+      function collapseThinking() {
+        requestAnimationFrame(() => {
+          const thinkingContent = document.getElementById('thinkingContent');
+          const thinkingCollapsed = document.getElementById('thinkingCollapsed');
+          const thinkingExpandedDiv = document.querySelector('#thinkingExpanded .thinking-text-collapsed');
+
+          // Hide the streaming thinking content
+          thinkingContent.classList.add('visually-hidden');
+
+          // Copy the final thinking content to the collapsed view
+          thinkingExpandedDiv.innerHTML = thinkingContent.innerHTML;
+
+          // Show the collapsed toggle button
+          thinkingCollapsed.classList.remove('visually-hidden');
+        });
+      }
+
+      function clearThinking() {
+        requestAnimationFrame(() => {
+          const thinkingSection = document.getElementById('thinkingSection');
+          const thinkingContent = document.getElementById('thinkingContent');
+          const thinkingCollapsed = document.getElementById('thinkingCollapsed');
+
+          thinkingSection.classList.add('visually-hidden');
+          thinkingContent.innerHTML = '';
+          thinkingContent.classList.remove('visually-hidden');
+          thinkingCollapsed.classList.add('visually-hidden');
+
+          // Reset global state
+          lastThinking = null;
+        });
+      }
+
       function clearSummary() {
         requestAnimationFrame(() => {
           document.getElementById('summaryCard').classList.add('visually-hidden');
           target.innerHTML = '';
         });
+        clearThinking();
       }
 
       async function requestNewSummary() {
+        // Reset thinking state before new request
+        lastThinking = null;
+        isThinkingComplete = false;
+        clearThinking();
+
         const content = await getReferenceText()
             .then((text) => {
               postMessage({
