@@ -15,16 +15,12 @@ Based on: https://github.com/sysread/page-summarizer
 # Build extension for Firefox
 web-ext build
 
-# Run extension in Firefox for testing
-web-ext run
-
-# Load in Chrome: Navigate to chrome://extensions/, enable Developer Mode, and load unpacked from the repository root
 ```
 
 ### Installation
 The extension can be installed in:
 - **Chrome**: Load unpacked extension from the repo directory
-- **Firefox**: Use `web-ext run` or load temporary add-on
+- **Firefox**: load temporary add-on
 
 ## Architecture
 

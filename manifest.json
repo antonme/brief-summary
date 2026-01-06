@@ -12,7 +12,8 @@
   "host_permissions": [
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
-    "https://api.perplexity.ai/*"
+    "https://api.perplexity.ai/*",
+    "https://generativelanguage.googleapis.com/*"
   ],
   "icons": {
     "16": "assets/icon_16.png",

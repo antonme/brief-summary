@@ -68,6 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       openAIKey: '',
       anthropicApiKey: '',
       perplexityApiKey: '',
+      googleApiKey: '',
       debug: false,
       defaultProfile: 'default',
       profiles: ['default'],
@@ -88,6 +89,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       openAIKey: document.getElementById('openAIKey').value.trim(),
       anthropicApiKey: document.getElementById('anthropicApiKey').value.trim(),
       perplexityApiKey: document.getElementById('perplexityApiKey').value.trim(),
+      googleApiKey: document.getElementById('googleApiKey').value.trim(),
       debug: debug
     };
     
@@ -192,9 +194,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       'openAIKey',
       'anthropicApiKey',
       'perplexityApiKey',
-      'defaultProfile', 
-      'debug', 
-      'profiles', 
+      'googleApiKey',
+      'defaultProfile',
+      'debug',
+      'profiles',
       ...profileKeys
     ]);
     console.log('Config', config);
@@ -216,6 +219,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('openAIKey').value = config.openAIKey ?? '';
     document.getElementById('anthropicApiKey').value = config.anthropicApiKey ?? '';
     document.getElementById('perplexityApiKey').value = config.perplexityApiKey ?? '';
+    document.getElementById('googleApiKey').value = config.googleApiKey ?? '';
 
     // Load profiles into the dropdown and select the current profile.
     // Sort the profiles such that the default profile is always first.
@@ -309,6 +313,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Powers the button that opens the OpenAI API page
   document.getElementById('open-api-keys').addEventListener('click', function () {
     chrome.tabs.create({ url: 'https://platform.openai.com/api-keys' });
+  });
+
+  // Powers the button that opens the Anthropic API page
+  document.getElementById('open-anthropic-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://console.anthropic.com/settings/keys' });
+  });
+
+  // Powers the button that opens the Perplexity API page
+  document.getElementById('open-perplexity-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://www.perplexity.ai/settings/api' });
+  });
+
+  // Powers the button that opens the Google AI Studio API page
+  document.getElementById('open-google-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://aistudio.google.com/app/apikey' });
   });
 
   // Powers the button that exports the current profile config

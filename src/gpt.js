@@ -14,6 +14,10 @@ const ERR_ANTHROPIC_API_KEY = 'Error: Anthropic API key is not set';
 const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const ERR_PERPLEXITY_API_KEY = 'Error: Perplexity API key is not set';
 
+// Add new constants for Google Gemini
+const GOOGLE_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/';
+const ERR_GOOGLE_API_KEY = 'Error: Google API key is not set';
+
 /*------------------------------------------------------------------------------
  * Builds up a buffer of JSON data and returns the parsed JSON object once
  * enough data has been received to represent a complete JSON string. If the
@@ -122,8 +126,8 @@ function GptResponseReader(response) {
   };
 }
 
-// Modify fetchCompletions to handle CORS for Perplexity
-async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false) {
+// Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, model = '') {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -132,7 +136,7 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
     headers['x-api-key'] = apiKey;
     headers['anthropic-version'] = '2023-06-01';
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
-    
+
     console.log('Sending request to Anthropic API:', {
       endpoint: ANTHROPIC_ENDPOINT,
       headers: { ...headers, 'x-api-key': '***' },
@@ -146,7 +150,7 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
     });
   } else if (usePerplexityApi) {
     headers['Authorization'] = `Bearer ${apiKey}`;
-    
+
     console.log('Sending request to Perplexity API:', {
       endpoint: PERPLEXITY_ENDPOINT,
       headers: { ...headers, Authorization: '***' },
@@ -159,9 +163,27 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
       mode: 'cors',
       body: JSON.stringify(payload)
     });
+  } else if (useGoogleApi) {
+    // Google uses x-goog-api-key header instead of Authorization
+    headers['x-goog-api-key'] = apiKey;
+
+    // Build the Google endpoint with model and streaming
+    const endpoint = `${GOOGLE_ENDPOINT}${model}:streamGenerateContent?alt=sse`;
+
+    console.log('Sending request to Google Gemini API:', {
+      endpoint,
+      headers: { ...headers, 'x-goog-api-key': '***' },
+      payload
+    });
+
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
   } else {
     headers['Authorization'] = `Bearer ${apiKey}`;
-    
+
     console.log('Sending request to OpenAI API:', {
       endpoint: ENDPOINT,
       headers: { ...headers, Authorization: '***' },
@@ -198,25 +220,30 @@ function gptDone(port, summary) {
 //------------------------------------------------------------------------------
 export async function fetchAndStream(port, messages, model, profileName) {
   // Get global API keys
-  const { openAIKey, anthropicApiKey, perplexityApiKey } = await chrome.storage.sync.get([
+  const { openAIKey, anthropicApiKey, perplexityApiKey, googleApiKey } = await chrome.storage.sync.get([
     'openAIKey',
     'anthropicApiKey',
-    'perplexityApiKey'
+    'perplexityApiKey',
+    'googleApiKey'
   ]);
- console.log("Model: ", model);
-  // Determine which API to use based on model
+  console.log("Model: ", model);
+
+  // Determine which API to use based on model name prefixes
   const useAnthropicApi = model.startsWith('claude-');
-  const usePerplexityApi = model.startsWith('llama-');
-  
+  const usePerplexityApi = model.startsWith('sonar') || model.startsWith('llama-');
+  const useGoogleApi = model.startsWith('gemini-');
+
   // Select appropriate API key from global keys
-  const selectedApiKey = useAnthropicApi ? anthropicApiKey : 
-                        usePerplexityApi ? perplexityApiKey : 
+  const selectedApiKey = useAnthropicApi ? anthropicApiKey :
+                        usePerplexityApi ? perplexityApiKey :
+                        useGoogleApi ? googleApiKey :
                         openAIKey;
 
   // Add validation for API key
   if (!selectedApiKey) {
-    const errorMsg = useAnthropicApi ? ERR_ANTHROPIC_API_KEY : 
+    const errorMsg = useAnthropicApi ? ERR_ANTHROPIC_API_KEY :
                     usePerplexityApi ? ERR_PERPLEXITY_API_KEY :
+                    useGoogleApi ? ERR_GOOGLE_API_KEY :
                     ERR_OPENAI_KEY;
     console.error('API Key Error:', errorMsg);
     gptError(port, errorMsg);
@@ -248,7 +275,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
     // Format payload for Anthropic API
     const systemMessage = messages.find(m => m.role === 'system')?.content || '';
     const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n\n');
-    
+
     payload = {
       model: profile.model,
       messages: [{
@@ -260,11 +287,42 @@ export async function fetchAndStream(port, messages, model, profileName) {
       max_tokens: 4096
     };
   } else if (usePerplexityApi) {
-    // Format payload for Perplexity API
+    // Format payload for Perplexity API with web search (built-in)
     payload = {
       model: profile.model,
       messages: messages,
-      stream: true
+      stream: true,
+      // Perplexity models have built-in web search
+      // Use 'medium' search mode for balanced performance
+      search_mode: 'medium'
+    };
+  } else if (useGoogleApi) {
+    // Format payload for Google Gemini API
+    // Google API has a different format - uses contents array instead of messages
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const userMessages = messages.filter(m => m.role === 'user');
+
+    // Build contents array for Gemini
+    const contents = userMessages.map(msg => ({
+      role: 'user',
+      parts: [{ text: msg.content }]
+    }));
+
+    // If there's a system message, prepend it to the first user message
+    if (systemMessage && contents.length > 0) {
+      contents[0].parts[0].text = systemMessage + '\n\n' + contents[0].parts[0].text;
+    }
+
+    payload = {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 8192
+      },
+      // Add Google Search grounding tool
+      tools: [{
+        googleSearch: {}
+      }]
     };
   } else {
     // Format payload for OpenAI API
@@ -273,6 +331,17 @@ export async function fetchAndStream(port, messages, model, profileName) {
       messages: messages,
       stream: true
     };
+
+    // Add web search for GPT search models
+    if (profile.model.includes('search')) {
+      payload.tools = [{
+        type: 'function',
+        function: {
+          name: 'web_search',
+          description: 'Search the web for current information'
+        }
+      }];
+    }
   }
 
 
@@ -281,15 +350,18 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
   console.log('Using Anthropic API:', useAnthropicApi);
   console.log('Using Perplexity API:', usePerplexityApi);
-  
-  // Use profile-specific API keys
+  console.log('Using Google API:', useGoogleApi);
+
+  // Use profile-specific API keys (if implemented) or fall back to global keys
   let apiKey;
   if (useAnthropicApi) {
-    apiKey = profile.anthropicApiKey;
+    apiKey = profile.anthropicApiKey || selectedApiKey;
   } else if (usePerplexityApi) {
-    apiKey = profile.perplexityApiKey;
+    apiKey = profile.perplexityApiKey || selectedApiKey;
+  } else if (useGoogleApi) {
+    apiKey = profile.googleApiKey || selectedApiKey;
   } else {
-    apiKey = profile.apiKey; // OpenAI key
+    apiKey = profile.apiKey || selectedApiKey; // OpenAI key
   }
 
 
@@ -303,8 +375,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
   try {
     await debug('PAYLOAD', payload);
 
-    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi);
-    
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, profile.model);
+
     if (!response.ok) {
       const error = await response.json();
       console.error('API Error:', error);
@@ -339,8 +411,23 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 summary += content;
                 gptMessage(port, summary);
               }
+            } else if (useGoogleApi) {
+              // Handle Google Gemini streaming format
+              // Gemini format: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
+              const candidate = parsed.candidates?.[0];
+              const content = candidate?.content?.parts?.[0]?.text || '';
+              if (content) {
+                summary += content;
+                gptMessage(port, summary);
+              }
+
+              // Check for grounding metadata (search results)
+              const groundingMetadata = candidate?.groundingMetadata;
+              if (groundingMetadata) {
+                console.log('Google Search grounding metadata:', groundingMetadata);
+              }
             } else if (usePerplexityApi) {
-              // Log the initial response
+              // Handle Perplexity streaming format
               console.log('Response:', response);
               console.log("Delta: ", parsed.choices[0].delta);
 
@@ -350,6 +437,11 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 gptMessage(port, summary);
               }
 
+              // Check for citations (Perplexity returns these)
+              const citations = parsed.citations;
+              if (citations) {
+                console.log('Perplexity citations:', citations);
+              }
             } else {
               // Handle OpenAI streaming format
               const content = parsed.choices[0]?.delta?.content || '';
