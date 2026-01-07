@@ -39,7 +39,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "{A1834A25-9D45-43A1-8EE3-64B7CE7B0F3A}"
+      "id": "summarizer@dev"
     }
   }
 }
