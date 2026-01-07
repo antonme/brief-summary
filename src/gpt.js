@@ -18,6 +18,14 @@ const ERR_PERPLEXITY_API_KEY = 'Error: Perplexity API key is not set';
 const GOOGLE_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/';
 const ERR_GOOGLE_API_KEY = 'Error: Google API key is not set';
 
+// Add new constants for OpenRouter
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const ERR_OPENROUTER_API_KEY = 'Error: OpenRouter API key is not set';
+
+// Add new constants for xAI
+const XAI_ENDPOINT = 'https://api.x.ai/v1/chat/completions';
+const ERR_XAI_API_KEY = 'Error: xAI API key is not set';
+
 /*------------------------------------------------------------------------------
  * Builds up a buffer of JSON data and returns the parsed JSON object once
  * enough data has been received to represent a complete JSON string. If the
@@ -127,7 +135,7 @@ function GptResponseReader(response) {
 }
 
 // Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
-async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, model = '') {
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '') {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -181,6 +189,36 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
       headers: headers,
       body: JSON.stringify(payload)
     });
+  } else if (useOpenRouterApi) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['HTTP-Referer'] = 'https://github.com/sysread/page-summarizer';
+    headers['X-Title'] = 'Page Summarizer';
+
+    console.log('Sending request to OpenRouter API:', {
+      endpoint: OPENROUTER_ENDPOINT,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(OPENROUTER_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+  } else if (useXaiApi) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+
+    console.log('Sending request to xAI API:', {
+      endpoint: XAI_ENDPOINT,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(XAI_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
   } else {
     headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -225,11 +263,13 @@ function gptDone(port, summary) {
 //------------------------------------------------------------------------------
 export async function fetchAndStream(port, messages, model, profileName) {
   // Get global API keys
-  const { openAIKey, anthropicApiKey, perplexityApiKey, googleApiKey } = await chrome.storage.sync.get([
+  const { openAIKey, anthropicApiKey, perplexityApiKey, googleApiKey, openRouterApiKey, xaiApiKey } = await chrome.storage.sync.get([
     'openAIKey',
     'anthropicApiKey',
     'perplexityApiKey',
-    'googleApiKey'
+    'googleApiKey',
+    'openRouterApiKey',
+    'xaiApiKey'
   ]);
   console.log("Model: ", model);
 
@@ -237,11 +277,15 @@ export async function fetchAndStream(port, messages, model, profileName) {
   const useAnthropicApi = model.startsWith('claude-');
   const usePerplexityApi = model.startsWith('sonar') || model.startsWith('llama-');
   const useGoogleApi = model.startsWith('gemini-');
+  const useOpenRouterApi = model.startsWith('openrouter/');
+  const useXaiApi = model.startsWith('grok-');
 
   // Select appropriate API key from global keys
   const selectedApiKey = useAnthropicApi ? anthropicApiKey :
                         usePerplexityApi ? perplexityApiKey :
                         useGoogleApi ? googleApiKey :
+                        useOpenRouterApi ? openRouterApiKey :
+                        useXaiApi ? xaiApiKey :
                         openAIKey;
 
   // Add validation for API key
@@ -249,6 +293,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
     const errorMsg = useAnthropicApi ? ERR_ANTHROPIC_API_KEY :
                     usePerplexityApi ? ERR_PERPLEXITY_API_KEY :
                     useGoogleApi ? ERR_GOOGLE_API_KEY :
+                    useOpenRouterApi ? ERR_OPENROUTER_API_KEY :
+                    useXaiApi ? ERR_XAI_API_KEY :
                     ERR_OPENAI_KEY;
     console.error('API Key Error:', errorMsg);
     gptError(port, errorMsg);
@@ -341,6 +387,33 @@ export async function fetchAndStream(port, messages, model, profileName) {
         googleSearch: {}
       }]
     };
+  } else if (useOpenRouterApi) {
+    // Format payload for OpenRouter API
+    // OpenRouter uses OpenAI-compatible format, but we need to strip the 'openrouter/' prefix
+    const openRouterModel = profile.model.replace('openrouter/', '');
+
+    payload = {
+      model: openRouterModel,
+      messages: messages,
+      stream: true
+    };
+  } else if (useXaiApi) {
+    // Format payload for xAI API (OpenAI-compatible with search)
+    payload = {
+      model: profile.model,
+      messages: messages,
+      stream: true
+    };
+
+    // Enable search capabilities for Grok models
+    // Web and X/Twitter search via search_parameters
+    payload.search_parameters = {
+      mode: 'auto',  // Model decides when to search
+      sources: [
+        { type: 'web' },
+        { type: 'x' }
+      ]
+    };
   } else {
     // Format payload for OpenAI API
     payload = {
@@ -368,6 +441,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
   console.log('Using Anthropic API:', useAnthropicApi);
   console.log('Using Perplexity API:', usePerplexityApi);
   console.log('Using Google API:', useGoogleApi);
+  console.log('Using OpenRouter API:', useOpenRouterApi);
+  console.log('Using xAI API:', useXaiApi);
 
   // Use profile-specific API keys (if implemented) or fall back to global keys
   let apiKey;
@@ -377,6 +452,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
     apiKey = profile.perplexityApiKey || selectedApiKey;
   } else if (useGoogleApi) {
     apiKey = profile.googleApiKey || selectedApiKey;
+  } else if (useOpenRouterApi) {
+    apiKey = profile.openRouterApiKey || selectedApiKey;
+  } else if (useXaiApi) {
+    apiKey = profile.xaiApiKey || selectedApiKey;
   } else {
     apiKey = profile.apiKey || selectedApiKey; // OpenAI key
   }
@@ -392,12 +471,24 @@ export async function fetchAndStream(port, messages, model, profileName) {
   try {
     await debug('PAYLOAD', payload);
 
-    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, profile.model);
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model);
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error('API Error:', error);
-      throw new Error(error.error?.message || 'API request failed');
+      const errorText = await response.text();
+      console.error('API Error Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText,
+        headers: Object.fromEntries(response.headers.entries())
+      });
+
+      try {
+        const errorJson = JSON.parse(errorText);
+        throw new Error(errorJson.error?.message || errorJson.message || `API request failed: ${response.status} ${response.statusText}`);
+      } catch (e) {
+        // If JSON parsing fails, throw the text error
+        throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorText.substring(0, 200)}`);
+      }
     }
 
     const reader = response.body.getReader();
@@ -511,6 +602,48 @@ export async function fetchAndStream(port, messages, model, profileName) {
               const citations = parsed.citations;
               if (citations) {
                 console.log('Perplexity citations:', citations);
+              }
+            } else if (useOpenRouterApi) {
+              // Handle OpenRouter streaming format (OpenAI-compatible)
+              const content = parsed.choices[0]?.delta?.content || '';
+              if (content) {
+                summary += content;
+                gptMessage(port, summary);
+              }
+            } else if (useXaiApi) {
+              // Handle xAI streaming format (OpenAI-compatible with reasoning)
+              const delta = parsed.choices[0]?.delta;
+
+              // Debug: Log the entire delta object to see what fields are present
+              if (delta && Object.keys(delta).length > 0) {
+                console.log('xAI delta object:', JSON.stringify(delta, null, 2));
+              }
+
+              // Handle reasoning content (for grok-*-reasoning models)
+              // Check multiple possible field names for reasoning
+              const reasoningContent = delta?.reasoning_content || delta?.thinking || '';
+              if (reasoningContent) {
+                console.log('xAI reasoning chunk received:', reasoningContent.substring(0, 50) + '...');
+                thinkingBuffer += reasoningContent;
+                summary += reasoningContent;  // For backward compatibility
+                gptThinking(port, thinkingBuffer);
+              }
+
+              // Handle regular output content
+              const content = delta?.content || '';
+              if (content) {
+                console.log('xAI content chunk received:', content.substring(0, 50) + '...');
+                outputBuffer += content;
+                summary += content;  // For backward compatibility
+                gptMessage(port, outputBuffer);
+              }
+
+              // Log search usage and reasoning token information
+              if (parsed.usage?.num_sources_used) {
+                console.log('xAI search sources used:', parsed.usage.num_sources_used);
+              }
+              if (parsed.usage?.completion_tokens_details?.reasoning_tokens) {
+                console.log('xAI reasoning tokens:', parsed.usage.completion_tokens_details.reasoning_tokens);
               }
             } else {
               // Handle OpenAI streaming format

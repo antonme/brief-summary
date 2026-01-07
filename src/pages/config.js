@@ -69,6 +69,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       anthropicApiKey: '',
       perplexityApiKey: '',
       googleApiKey: '',
+      openRouterApiKey: '',
+      xaiApiKey: '',
       debug: false,
       defaultProfile: 'default',
       profiles: ['default'],
@@ -90,6 +92,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       anthropicApiKey: document.getElementById('anthropicApiKey').value.trim(),
       perplexityApiKey: document.getElementById('perplexityApiKey').value.trim(),
       googleApiKey: document.getElementById('googleApiKey').value.trim(),
+      openRouterApiKey: document.getElementById('openRouterApiKey').value.trim(),
+      xaiApiKey: document.getElementById('xaiApiKey').value.trim(),
       debug: debug
     };
     
@@ -195,6 +199,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       'anthropicApiKey',
       'perplexityApiKey',
       'googleApiKey',
+      'openRouterApiKey',
+      'xaiApiKey',
       'defaultProfile',
       'debug',
       'profiles',
@@ -220,6 +226,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('anthropicApiKey').value = config.anthropicApiKey ?? '';
     document.getElementById('perplexityApiKey').value = config.perplexityApiKey ?? '';
     document.getElementById('googleApiKey').value = config.googleApiKey ?? '';
+    document.getElementById('openRouterApiKey').value = config.openRouterApiKey ?? '';
+    document.getElementById('xaiApiKey').value = config.xaiApiKey ?? '';
 
     // Load profiles into the dropdown and select the current profile.
     // Sort the profiles such that the default profile is always first.
@@ -328,6 +336,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Powers the button that opens the Google AI Studio API page
   document.getElementById('open-google-keys').addEventListener('click', function () {
     chrome.tabs.create({ url: 'https://aistudio.google.com/app/apikey' });
+  });
+
+  // Powers the button that opens the OpenRouter API page
+  document.getElementById('open-openrouter-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://openrouter.ai/keys' });
+  });
+
+  // Powers the button that opens the xAI API page
+  document.getElementById('open-xai-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://console.x.ai/' });
   });
 
   // Powers the button that exports the current profile config

@@ -111,6 +111,44 @@
                         </button>
                     </div>
 
+                    <div class="input-group mt-3">
+                        <label class="input-group-text" for="openRouterApiKey"
+                            >OpenRouter API Key</label
+                        >
+                        <input
+                            type="text"
+                            id="openRouterApiKey"
+                            name="openRouterApiKey"
+                            class="form-control"
+                        />
+                        <button
+                            id="open-openrouter-keys"
+                            class="btn btn-primary btn-sm"
+                            title="OpenRouter API keys"
+                        >
+                            &#x2197;
+                        </button>
+                    </div>
+
+                    <div class="input-group mt-3">
+                        <label class="input-group-text" for="xaiApiKey"
+                            >xAI API Key</label
+                        >
+                        <input
+                            type="text"
+                            id="xaiApiKey"
+                            name="xaiApiKey"
+                            class="form-control"
+                        />
+                        <button
+                            id="open-xai-keys"
+                            class="btn btn-primary btn-sm"
+                            title="xAI API keys"
+                        >
+                            &#x2197;
+                        </button>
+                    </div>
+
                     <div class="form-check mb-3">
                         <input
                             type="checkbox"
@@ -205,6 +243,32 @@
                                 </option>
                                 <option value="sonar">
                                     Sonar (Web search built-in)
+                                </option>
+                            </optgroup>
+
+                            <!-- OpenRouter Models -->
+                            <optgroup label="OpenRouter Models">
+                                <option value="openrouter/qwen/qwen3-max">
+                                    OpenRouter: Qwen 3 Max
+                                </option>
+                                <option value="openrouter/deepseek/deepseek-r1">
+                                    OpenRouter: DeepSeek R1
+                                </option>
+                                <option value="openrouter/moonshotai/kimi-k2-thinking">
+                                    OpenRouter: Kimi K2 Thinking
+                                </option>
+                            </optgroup>
+
+                            <!-- xAI Grok Models -->
+                            <optgroup label="xAI Grok Models">
+                                <option value="grok-4-1-fast-reasoning">
+                                    Grok 4.1 Fast Reasoning (Web + X Search)
+                                </option>
+                                <option value="grok-4-1-fast-non-reasoning">
+                                    Grok 4.1 Fast Non-Reasoning (Web + X Search)
+                                </option>
+                                <option value="grok-4-0709">
+                                    Grok 4 (July 2024) (Web + X Search)
                                 </option>
                             </optgroup>
                         </select>
