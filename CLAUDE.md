@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Page Summarizer is a Chrome/Firefox browser extension (Manifest V3) that summarizes web pages and selected text using LLM APIs. It supports multiple providers: OpenAI (GPT models), Anthropic (Claude), Perplexity (Sonar), and Google (Gemini).
+Page Summarizer is a Chrome/Firefox browser extension (Manifest V3) that summarizes web pages using LLM APIs. It supports multiple providers: OpenAI (GPT models), Anthropic (Claude), Perplexity (Sonar), and Google (Gemini).
 
 Based on: https://github.com/sysread/page-summarizer
 
@@ -30,10 +30,8 @@ The extension uses a **message-passing architecture** between background scripts
 
 **Main Components:**
 
-1. **background.js** - Service worker that initializes three feature connectors:
-   - `connectPageSummarizer()` - Main page summarization
-   - `connectSelectionSummarizer()` - Context menu for selected text
-   - `connectFormFiller()` - AI-powered form filling
+1. **background.js** - Service worker that initializes the page summarization feature:
+   - `connectPageSummarizer()` - Main page summarization via popup
 
 2. **gpt.js** - Core API abstraction layer that handles streaming completions from all supported LLM providers
    - Manages API endpoints and authentication for OpenAI, Anthropic, Perplexity, and Google
@@ -59,9 +57,9 @@ Each provider has different payload formats (see gpt.js:280-339).
 
 ### Message Flow for Summarization
 
-1. User triggers action (popup, context menu)
-2. Content script connects to background via named port (`'summarize'`, `'fillForm'`, etc.)
-3. Port receives messages with action type (`SUMMARIZE`, `GET_COMPLETION`)
+1. User opens popup and clicks summarize button
+2. Popup script connects to background via named port (`'summarize'`)
+3. Port sends message with action type `SUMMARIZE`
 4. Background calls `fetchAndStream(port, messages, model, profileName)`
 5. API responses stream back through port messages:
    - `GPT_MESSAGE` - Incremental content updates
@@ -76,14 +74,6 @@ The extension has evolved through several config schema versions. On install/upd
 - `updateProfileStructure_20240620()` - Changed profiles from object to array-based structure
 
 When modifying config structure, add new migration functions to compat.js and call in background.js.
-
-### Context Menu Features
-
-Two context menu items are registered:
-- **"Summarize selection"** (`summarizeSelectedText`) - Available when text is selected
-- **"Fill with text using GPT"** (`fillForm`) - Available on editable fields
-
-Both inject content scripts dynamically using `loadSupportScripts()` from util.js, which includes marked.min.js for markdown rendering.
 
 ## Key Files
 
@@ -104,7 +94,6 @@ Both inject content scripts dynamically using `loadSupportScripts()` from util.j
 - **o1 models**: System messages converted to user messages (gpt.js:319-326)
 - **Google API**: Uses `x-goog-api-key` header instead of Bearer token
 - **Anthropic API**: Requires `anthropic-dangerous-direct-browser-access: true` header for CORS
-- **PDF files**: Selection summarization disabled for PDFs (shows alert)
 
 ### Browser Compatibility
 Uses `globalThis.browser = chrome` polyfill for Chrome compatibility (Firefox natively supports `browser` namespace).

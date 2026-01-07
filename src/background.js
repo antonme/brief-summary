@@ -1,6 +1,4 @@
 import { connectPageSummarizer } from './page_summarizer.js';
-import { connectSelectionSummarizer } from './selection_summarizer.js';
-import { connectFormFiller } from './form_filler.js';
 
 import {
   setDefaultConfig,
@@ -12,12 +10,6 @@ import {
 
 // Summarize page
 connectPageSummarizer();
-
-// Summarize selected text (context menu item)
-connectSelectionSummarizer();
-
-// Fill in form input (context menu item)
-connectFormFiller();
 
 if (typeof browser == "undefined") {
   // Chrome does not support the browser namespace yet.
