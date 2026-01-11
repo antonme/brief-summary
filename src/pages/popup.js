@@ -620,12 +620,14 @@ document.addEventListener("DOMContentLoaded", async function () {
     isThinkingComplete = false;
     clearThinking();
 
+    const url = await getOriginalTabUrl();
     const content = await getReferenceText()
       .then((text) => {
         postMessage({
           action: "SUMMARIZE",
           profile: currentProfile,
           content: text,
+          url: url,
         });
       })
       .catch((error) => {
