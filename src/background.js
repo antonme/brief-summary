@@ -6,6 +6,7 @@ import {
   updateModelNaming_20240129,
   updateModelNaming_20240423,
   updateProfileStructure_20240620,
+  updateCacheStructure_20260111,
 } from './compat.js';
 
 // Summarize page
@@ -20,5 +21,6 @@ if (typeof browser == "undefined") {
 browser.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install' || details.reason === 'update') {
     await setDefaultConfig();
+    await updateCacheStructure_20260111();
   }
 });

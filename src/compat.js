@@ -117,3 +117,54 @@ export async function updateProfileStructure_20240620() {
     return newConfig;
   });
 }
+
+// Migrate cache structure from URL-based to profile-based
+export async function updateCacheStructure_20260111() {
+  const localStorage = await chrome.storage.local.get('results');
+
+  if (!localStorage.results) {
+    return; // No cache to migrate
+  }
+
+  const oldResults = localStorage.results;
+
+  // Check if already migrated (new structure has profile__ keys)
+  const firstKey = Object.keys(oldResults)[0];
+  if (!firstKey || firstKey.startsWith('profile__')) {
+    return; // Already migrated or empty
+  }
+
+  // Get default profile to migrate old caches to
+  const { defaultProfile } = await chrome.storage.sync.get('defaultProfile');
+  const targetProfile = defaultProfile || 'default';
+  const profileKey = `profile__${targetProfile}`;
+
+  // Migrate to new structure
+  const newResults = {
+    [profileKey]: {}
+  };
+
+  for (const url of Object.keys(oldResults)) {
+    const entry = oldResults[url];
+
+    // Handle both string format and {model, summary} object format
+    if (typeof entry === 'string') {
+      newResults[profileKey][url] = {
+        model: 'unknown',
+        summary: entry,
+        thinking: null,
+        timestamp: Date.now()
+      };
+    } else if (entry && entry.summary) {
+      newResults[profileKey][url] = {
+        model: entry.model || 'unknown',
+        summary: entry.summary,
+        thinking: null,
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  await chrome.storage.local.set({ results: newResults });
+  console.log(`Migrated ${Object.keys(oldResults).length} cached summaries to profile: ${targetProfile}`);
+}

@@ -251,9 +251,9 @@ function gptThinking(port, thinking) {
   port.postMessage({ action: 'GPT_THINKING', thinking: thinking });
 }
 
-function gptDone(port, summary) {
+function gptDone(port, model, summary) {
   console.log('Sending done signal');
-  port.postMessage({ action: 'GPT_DONE', summary: summary });
+  port.postMessage({ action: 'GPT_DONE', model: model, summary: summary });
 }
 
 //------------------------------------------------------------------------------
@@ -663,7 +663,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
     // Send done message with output buffer (or full summary for backward compatibility)
     const finalContent = outputBuffer || summary;
     if (finalContent) {
-      gptDone(port, finalContent);
+      gptDone(port, model, finalContent);
     } else {
       throw new Error('No content received from API');
     }

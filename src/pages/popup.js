@@ -80,8 +80,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   summarizeButton.addEventListener("click", async () => {
     working = true;
     updateSummary("Fetching summary...");
-    const summary = await requestNewSummary();
-    await cacheSummary(url, summary);
+    await requestNewSummary();
   });
 
   //----------------------------------------------------------------------------
@@ -142,6 +141,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   let lastMessage = null;
   let lastThinking = null;
   let isThinkingComplete = false;
+  let working = false;
 
   async function onMessage(msg) {
     if (msg == null) {
@@ -368,6 +368,39 @@ document.addEventListener("DOMContentLoaded", async function () {
     // Save the selected profile name locally
     await chrome.storage.local.set({ lastUsedProfile: selectedProfileName });
 
+    // Check if cached summary exists for this profile+URL
+    const cached = await restoreSummary();
+
+    if (cached) {
+      // Restore complete cached state
+      lastMessage = cached.summary;
+      updateSummary(format(cached.summary));
+
+      // Restore thinking if it exists
+      if (cached.thinking) {
+        lastThinking = cached.thinking;
+        updateThinking(cached.thinking);
+        collapseThinking();
+        isThinkingComplete = true;
+      } else {
+        clearThinking();
+      }
+
+      // Scroll to top after restoration
+      requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+      });
+    } else {
+      // No cache - automatically start summarization
+      clearThinking();
+      lastMessage = null;
+      lastThinking = null;
+      isThinkingComplete = false;
+      working = true;
+      updateSummary("Fetching summary...");
+      requestNewSummary();
+    }
+
     const profileKey = `profile__${selectedProfileName}`;
     const profileData = await chrome.storage.sync.get(profileKey);
   }
@@ -401,19 +434,25 @@ document.addEventListener("DOMContentLoaded", async function () {
     const url = await getOriginalTabUrl();
     const config = await chrome.storage.local.get("results");
 
-    if (config.results && config.results[url]) {
-      const result = config.results[url];
+    if (!config.results) return null;
 
-      // Check if the result is a string (old format) or an object (new format)
-      if (typeof result === "string") {
-        return { summary: result, model: config.model }; // Convert to new format for consistency
-      }
+    // Look up by current profile
+    const profileKey = `profile__${currentProfile}`;
+    const profileCache = config.results[profileKey];
 
-      // It's already in the new format (object with model and summary)
-      return result;
-    } else {
+    if (!profileCache || !profileCache[url]) {
       return null;
     }
+
+    const result = profileCache[url];
+
+    // Return all cached data including thinking
+    return {
+      summary: result.summary,
+      model: result.model,
+      thinking: result.thinking || null,
+      timestamp: result.timestamp || null
+    };
   }
 
   async function setSummary(summary, model) {
@@ -421,8 +460,22 @@ document.addEventListener("DOMContentLoaded", async function () {
     const config = await chrome.storage.local.get("results");
 
     let results = config.results || {};
-    results[url] = { model: model, summary: summary };
-    chrome.storage.local.set({ results: results });
+
+    // Use profile as top-level key
+    const profileKey = `profile__${currentProfile}`;
+    if (!results[profileKey]) {
+      results[profileKey] = {};
+    }
+
+    // Save summary with thinking content and timestamp
+    results[profileKey][url] = {
+      model: model,
+      summary: summary,
+      thinking: lastThinking || null,
+      timestamp: Date.now()
+    };
+
+    await chrome.storage.local.set({ results: results });
   }
 
   function updateSummary(message) {
@@ -526,67 +579,5 @@ document.addEventListener("DOMContentLoaded", async function () {
         clearSummary();
         working = false;
       });
-  }
-
-  // Restore the last page summary when the popup is opened
-  restoreSummary().then((result) => {
-    if (result != null) {
-      updateSummary(marked.marked(result.summary));
-
-      lastMessage = result.summary;
-
-      // When restoring a summary, force the page to scroll to the top
-      requestAnimationFrame(() => {
-        window.scrollTo(0, 0);
-      });
-    }
-  });
-
-  // Flag to prevent multiple clicks
-  let working = false;
-
-  // Function to check if a summary is already cached
-  async function isSummaryCached(url) {
-    if (typeof caches === "undefined") return false;
-
-    const cache = await caches.open("summary-cache");
-    const cachedResponse = await cache.match(url);
-    return cachedResponse !== undefined;
-  }
-
-  // Function to get the cached summary
-  async function getCachedSummary(url) {
-    const cache = await caches.open("summary-cache");
-    const cachedResponse = await cache.match(url);
-    console.log("url", url);
-    console.log("cachedResponse", cachedResponse.text());
-    if (cachedResponse) {
-      return cachedResponse.text();
-    }
-    return null;
-  }
-
-  // Function to cache the summary
-  async function cacheSummary(url, summary) {
-    const cache = await caches.open("summary-cache");
-    const response = new Response(summary, {
-      headers: { "Content-Type": "text/plain" },
-    });
-    await cache.put(url, response);
-    console.log("Cache put:", url, summary);
-  }
-
-  // Automatically start summarization when the popup opens if not cached
-  const url = await getOriginalTabUrl();
-  if (!(await isSummaryCached(url))) {
-    working = true;
-    updateSummary("Fetching summary...");
-    const summary = await requestNewSummary();
-    await cacheSummary(url, summary);
-  } else {
-    const cachedSummary = await getCachedSummary(url);
-    if (cachedSummary) {
-      updateSummary(cachedSummary);
-    }
   }
 });
