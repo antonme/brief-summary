@@ -176,6 +176,9 @@ document.addEventListener("DOMContentLoaded", async function () {
 
         // Reset thinking state for next request
         isThinkingComplete = false;
+
+        // Update cache indicator for current profile
+        await updateProfileCacheIndicator(currentProfile);
         break;
 
       case "GPT_ERROR":
@@ -322,11 +325,27 @@ document.addEventListener("DOMContentLoaded", async function () {
     // Clear existing buttons
     profileContainer.innerHTML = "";
 
-    sortedProfiles.forEach(async (profileName) => {
+    // Use for...of instead of forEach to properly handle async/await
+    for (const profileName of sortedProfiles) {
       const button = document.createElement("button");
       button.className =
         "profile-button btn btn-sm btn-outline-secondary text-nowrap";
-      button.textContent = profileName;
+
+      // Check if this profile has cached data
+      const hasCache = await hasCachedSummary(profileName);
+
+      if (hasCache) {
+        // Add green dot indicator for cached profiles
+        const dot = document.createElement("span");
+        dot.textContent = "● ";
+        dot.style.color = "#28a745"; // Bootstrap success green
+        dot.style.fontSize = "0.7em";
+        dot.style.marginRight = "2px";
+        button.appendChild(dot);
+      }
+
+      // Add profile name as text node
+      button.appendChild(document.createTextNode(profileName));
 
       // Add click event listener for profile buttons
       button.addEventListener("click", async () => {
@@ -334,12 +353,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       });
 
       profileContainer.appendChild(button);
-
-      if (profileName === lastUsedProfile) {
-        const profileKey = `profile__${profileName}`;
-        const profileData = await chrome.storage.sync.get(profileKey);
-      }
-    });
+    }
 
     // Automatically select a profile if necessary
     if (lastUsedProfile) {
@@ -357,7 +371,10 @@ document.addEventListener("DOMContentLoaded", async function () {
     const buttons = profileContainer.getElementsByClassName("btn");
 
     for (const button of buttons) {
-      if (button.textContent === currentProfile) {
+      // Check text content excluding dot
+      const buttonText = button.textContent.replace(/^●\s*/, '').trim();
+
+      if (buttonText === currentProfile) {
         button.className =
           "btn btn-sm m-1 text-nowrap btn-outline-primary active";
       } else {
@@ -453,6 +470,43 @@ document.addEventListener("DOMContentLoaded", async function () {
       thinking: result.thinking || null,
       timestamp: result.timestamp || null
     };
+  }
+
+  async function hasCachedSummary(profileName) {
+    const url = await getOriginalTabUrl();
+    const config = await chrome.storage.local.get("results");
+
+    if (!config.results) return false;
+
+    const profileKey = `profile__${profileName}`;
+    const profileCache = config.results[profileKey];
+
+    return !!(profileCache && profileCache[url]);
+  }
+
+  async function updateProfileCacheIndicator(profileName) {
+    const buttons = profileContainer.getElementsByClassName("btn");
+
+    for (const button of buttons) {
+      // Find button by checking text content (excluding any existing dot)
+      const buttonText = button.textContent.replace(/^●\s*/, '').trim();
+
+      if (buttonText === profileName) {
+        // Check if it already has a dot
+        const hasDot = button.querySelector('span[style*="color"]');
+
+        if (!hasDot) {
+          // Add green dot
+          const dot = document.createElement("span");
+          dot.textContent = "● ";
+          dot.style.color = "#28a745";
+          dot.style.fontSize = "0.7em";
+          dot.style.marginRight = "2px";
+          button.insertBefore(dot, button.firstChild);
+        }
+        break;
+      }
+    }
   }
 
   async function setSummary(summary, model) {
