@@ -79,7 +79,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   summarizeButton.addEventListener("click", async () => {
     working = true;
-    updateSummary("Fetching summary...");
+    await showModelWorking(currentProfile);
     await requestNewSummary();
   });
 
@@ -143,6 +143,35 @@ document.addEventListener("DOMContentLoaded", async function () {
   let isThinkingComplete = false;
   let working = false;
 
+  //----------------------------------------------------------------------------
+  // Model footer + loading dots
+  //----------------------------------------------------------------------------
+  const modelFooter = document.getElementById("modelFooter");
+  const modelLabel = document.getElementById("modelLabel");
+  let currentModelName = "";
+
+  async function showModelWorking(profileName) {
+    const profileKey = `profile__${profileName}`;
+    const profileData = await chrome.storage.sync.get(profileKey);
+    currentModelName = profileData[profileKey]?.model || "unknown";
+    modelFooter.classList.add("visually-hidden");
+    updateSummary(
+      `<div class="d-flex align-items-center gap-2">` +
+        `<div class="thinking-dots"><span></span><span></span><span></span></div>` +
+        `<span class="text-muted">${currentModelName}</span>` +
+      `</div>`
+    );
+  }
+
+  function showModelFooter() {
+    modelLabel.textContent = currentModelName;
+    modelFooter.classList.remove("visually-hidden");
+  }
+
+  function hideModelFooter() {
+    modelFooter.classList.add("visually-hidden");
+  }
+
   async function onMessage(msg) {
     if (msg == null) {
       return;
@@ -173,6 +202,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         const model = msg.model;
         setSummary(lastMessage, model);
         working = false;
+        showModelFooter();
 
         // Reset thinking state for next request
         isThinkingComplete = false;
@@ -184,6 +214,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       case "GPT_ERROR":
         reportError(msg.error);
         working = false;
+        hideModelFooter();
 
         // Reset thinking state on error
         clearThinking();
@@ -389,7 +420,8 @@ document.addEventListener("DOMContentLoaded", async function () {
     const cached = await restoreSummary();
 
     if (cached) {
-      // Restore complete cached state
+      // Restore complete cached state - no active work
+      hideModelFooter();
       lastMessage = cached.summary;
       updateSummary(format(cached.summary));
 
@@ -414,7 +446,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       lastThinking = null;
       isThinkingComplete = false;
       working = true;
-      updateSummary("Fetching summary...");
+      await showModelWorking(selectedProfileName);
       requestNewSummary();
     }
 
