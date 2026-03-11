@@ -82,6 +82,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const debug = document.getElementById('debug').checked;
     const profileName = document.getElementById('name').value.trim();
     const model = document.getElementById('model').value.trim();
+    const thinkingEffort = document.getElementById('thinkingEffort').value;
     const customPrompts = document.getElementById('customPrompts').value.trim();
     const systemMessage = document.getElementById('systemMessage').value.trim();
     const isDefault = document.getElementById('default').checked;
@@ -103,6 +104,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Create new profile data
     const newProfile = {
       model: model,
+      thinkingEffort: thinkingEffort,
       customPrompts: customPrompts,
       systemMessage: systemMessage
     };
@@ -267,7 +269,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentProfile = profile;
       document.getElementById('profileSelector').value = profile;
       document.getElementById('name').value = profile;
-      document.getElementById('model').value = data.model || 'gpt-4o-mini';
+      document.getElementById('model').value = data.model || 'claude-sonnet-4-6';
+      // Try to match the selector; if no match, it stays on whatever was selected
+      const selector = document.getElementById('modelSelector');
+      const hasOption = Array.from(selector.options).some(o => o.value === data.model);
+      if (hasOption) selector.value = data.model;
+      document.getElementById('thinkingEffort').value = data.thinkingEffort || 'dynamic';
       document.getElementById('customPrompts').value = data.customPrompts || '';
       document.getElementById('systemMessage').value = data.systemMessage || '';
       document.getElementById('default').checked = profile === config.defaultProfile;
@@ -296,6 +303,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   function showSuccess(msg) {
     showStatus(msg, 'success');
   }
+
+  // When model selector changes, populate the model text field
+  document.getElementById('modelSelector').addEventListener('change', (e) => {
+    document.getElementById('model').value = e.target.value;
+  });
 
   // Update form inputs when profile is changed
   profileSelector.addEventListener('change', (e) => {
@@ -419,6 +431,63 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Powers the display of the custom prompts byte counter
   customPrompts.addEventListener('input', updateCustomPromptsCounter);
 
+  //--------------------------------------------------------------------------
+  // Cache management
+  //--------------------------------------------------------------------------
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function updateCacheStats() {
+    const data = await chrome.storage.local.get("results");
+    const results = data.results || {};
+
+    let entries = 0;
+    for (const profileKey of Object.keys(results)) {
+      entries += Object.keys(results[profileKey]).length;
+    }
+
+    const size = new Blob([JSON.stringify(results)]).size;
+
+    document.getElementById('cache-entries').textContent = entries;
+    document.getElementById('cache-size').textContent = formatBytes(size);
+  }
+
+  document.getElementById('clear-all-cache-btn').addEventListener('click', async () => {
+    if (!confirm('Clear all cached summaries? This cannot be undone.')) return;
+    await chrome.storage.local.remove("results");
+    showSuccess('All cache cleared.');
+    await updateCacheStats();
+  });
+
+  document.getElementById('clear-old-cache-btn').addEventListener('click', async () => {
+    const data = await chrome.storage.local.get("results");
+    const results = data.results || {};
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let removed = 0;
+
+    for (const profileKey of Object.keys(results)) {
+      const profileCache = results[profileKey];
+      for (const url of Object.keys(profileCache)) {
+        if (!profileCache[url].timestamp || profileCache[url].timestamp < oneWeekAgo) {
+          delete profileCache[url];
+          removed++;
+        }
+      }
+      // Remove profile key if empty
+      if (Object.keys(profileCache).length === 0) {
+        delete results[profileKey];
+      }
+    }
+
+    await chrome.storage.local.set({ results });
+    showSuccess(`Removed ${removed} cached ${removed === 1 ? 'entry' : 'entries'} older than 1 week.`);
+    await updateCacheStats();
+  });
+
   // Load config on page load
   await reloadConfig();
+  await updateCacheStats();
 });

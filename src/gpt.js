@@ -359,6 +359,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
   });
 
 
+  // Map thinking effort to token budgets (-1 = dynamic)
+  const effortToBudget = { off: 0, low: 2000, medium: 10000, high: 32000, max: 100000, dynamic: -1 };
+  const thinkingBudget = effortToBudget[profile.thinkingEffort] ?? -1;
+
   let payload;
   if (useAnthropicApi) {
     // Format payload for Anthropic API
@@ -373,13 +377,16 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }],
       system: systemMessage,
       stream: true,
-      max_tokens: 16000,
-      // Enable extended thinking for supported Claude models
-      thinking: {
-        type: "enabled",
-        budget_tokens: 10000  // Minimum 1024, allows substantial reasoning
-      }
+      max_tokens: thinkingBudget > 0 ? thinkingBudget + 8000 : (thinkingBudget === -1 ? 16000 : 8000),
     };
+
+    if (thinkingBudget !== 0) {
+      payload.thinking = {
+        type: "enabled",
+        // Claude has no native dynamic mode; use 10k as a reasonable default
+        budget_tokens: thinkingBudget === -1 ? 10000 : thinkingBudget
+      };
+    }
   } else if (usePerplexityApi) {
     // Format payload for Perplexity API with web search (built-in)
     payload = {
@@ -412,13 +419,13 @@ export async function fetchAndStream(port, messages, model, profileName) {
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 8192,
-        // Enable thinking mode for Gemini 2.5+ and Gemini 3+ models
-        thinkingConfig: {
-          // Using dynamic thinking budget (-1) which adjusts based on complexity
-          thinkingBudget: -1,
-          // CRITICAL: Must set includeThoughts to true to receive thinking content in streaming responses
-          includeThoughts: true
-        }
+        ...(thinkingBudget !== 0 ? {
+          thinkingConfig: {
+            // -1 = Gemini's native dynamic mode; positive = fixed budget
+            thinkingBudget: thinkingBudget,
+            includeThoughts: true
+          }
+        } : {})
       },
       // Add Google Search grounding tool
       tools: [{

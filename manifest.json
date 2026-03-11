@@ -3,7 +3,7 @@
   "name": "Page Summarizer",
   "version": "3.0.0",
   "description": "Summarize web pages using OpenAI API",
-  "permissions": ["activeTab", "storage", "scripting", "contextMenus"],
+  "permissions": ["activeTab", "storage", "unlimitedStorage", "scripting", "contextMenus"],
   "host_permissions": [
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",

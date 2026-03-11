@@ -33,6 +33,23 @@
             </div>
 
             <div class="card mb-3">
+                <div class="card-header">Cache management</div>
+                <div class="card-body">
+                    <p class="mb-2">
+                        Cached summaries:
+                        <strong id="cache-entries">...</strong> entries,
+                        <strong id="cache-size">...</strong>
+                    </p>
+                    <button id="clear-old-cache-btn" class="btn btn-warning btn-sm">
+                        Clear older than 1 week
+                    </button>
+                    <button id="clear-all-cache-btn" class="btn btn-danger btn-sm">
+                        Clear all cache
+                    </button>
+                </div>
+            </div>
+
+            <div class="card mb-3">
                 <div class="card-header">Global settings</div>
                 <div class="card-body">
                     <div class="input-group">
@@ -204,10 +221,10 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="model" class="form-label"
-                            >Default model</label
+                        <label for="modelSelector" class="form-label"
+                            >Model</label
                         >
-                        <select id="model" name="model" class="form-select">
+                        <select id="modelSelector" name="modelSelector" class="form-select mb-2">
                             <!-- OpenAI Models -->
                             <optgroup label="OpenAI Models">
                                 <option value="gpt-5.4">
@@ -273,6 +290,33 @@
                                     Grok 4.1 Fast Non-Reasoning (Web Search)
                                 </option>
                             </optgroup>
+                        </select>
+                        <input
+                            type="text"
+                            id="model"
+                            name="model"
+                            class="form-control"
+                            placeholder="Model ID (editable)"
+                        />
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="thinkingEffort" class="form-label"
+                            >Thinking effort (Claude, Gemini)</label
+                        >
+                        <select
+                            id="thinkingEffort"
+                            name="thinkingEffort"
+                            class="form-select"
+                        >
+                            <option value="off">Off</option>
+                            <option value="low">Low (2k tokens)</option>
+                            <option value="medium">Medium (10k tokens)</option>
+                            <option value="high">High (32k tokens)</option>
+                            <option value="max">Max (100k tokens)</option>
+                            <option value="dynamic" selected>
+                                Dynamic (model decides)
+                            </option>
                         </select>
                     </div>
 

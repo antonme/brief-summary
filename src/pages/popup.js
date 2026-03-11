@@ -625,7 +625,11 @@ document.addEventListener("DOMContentLoaded", async function () {
       timestamp: Date.now()
     };
 
-    await chrome.storage.local.set({ results: results });
+    try {
+      await chrome.storage.local.set({ results: results });
+    } catch (e) {
+      console.error("Failed to save summary to cache:", e);
+    }
   }
 
   function updateSummary(message) {
