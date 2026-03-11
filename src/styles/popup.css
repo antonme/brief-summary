@@ -20,6 +20,26 @@ li {
     font-family: 'Fira Sans', sans-serif;
   }
 
+/* Profile waiting indicator - static grey dot */
+.profile-dot-waiting {
+  color: #adb5bd;
+  font-size: 0.7em;
+  margin-right: 2px;
+}
+
+/* Profile streaming indicator - pulsing orange dot */
+.profile-dot-streaming {
+  color: #fd7e14;
+  font-size: 0.7em;
+  margin-right: 2px;
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 /* Pulsing dots - AI thinking indicator */
 .thinking-dots {
   display: inline-flex;

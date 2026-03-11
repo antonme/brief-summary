@@ -78,7 +78,13 @@ document.addEventListener("DOMContentLoaded", async function () {
   });
 
   summarizeButton.addEventListener("click", async () => {
-    working = true;
+    const stream = getStream(currentProfile);
+    stream.working = true;
+    stream.summary = null;
+    stream.thinking = null;
+    stream.thinkingComplete = false;
+    stream.started = false;
+    setStreamingIndicator(currentProfile, "waiting");
     await showModelWorking(currentProfile);
     await requestNewSummary();
   });
@@ -138,10 +144,15 @@ document.addEventListener("DOMContentLoaded", async function () {
   //----------------------------------------------------------------------------
   // Message listener
   //----------------------------------------------------------------------------
-  let lastMessage = null;
-  let lastThinking = null;
-  let isThinkingComplete = false;
-  let working = false;
+  let lastMessage = null;  // what's currently displayed (for copy button)
+  const streams = {};  // per-profile streaming state
+
+  function getStream(profile) {
+    if (!streams[profile]) {
+      streams[profile] = { summary: null, thinking: null, thinkingComplete: false, working: false, started: false };
+    }
+    return streams[profile];
+  }
 
   //----------------------------------------------------------------------------
   // Model footer + loading dots
@@ -173,57 +184,66 @@ document.addEventListener("DOMContentLoaded", async function () {
   }
 
   async function onMessage(msg) {
-    if (msg == null) {
-      return;
-    }
+    if (msg == null) return;
+
+    const msgProfile = msg.profile || currentProfile;
+    const stream = getStream(msgProfile);
+    const isCurrent = msgProfile === currentProfile;
 
     switch (msg.action) {
       case "GPT_THINKING":
-        // Thinking content is streaming
-        lastThinking = msg.thinking;
-        updateThinking(msg.thinking);
+        stream.thinking = msg.thinking;
+        if (!stream.started) {
+          stream.started = true;
+          setStreamingIndicator(msgProfile, "streaming");
+        }
+        if (isCurrent) updateThinking(msg.thinking);
         break;
 
       case "GPT_MESSAGE":
-        // Main output content is streaming
-        lastMessage = msg.summary;
-
-        // If we have thinking content and this is the first message,
-        // collapse the thinking section
-        if (lastThinking && !isThinkingComplete) {
-          collapseThinking();
-          isThinkingComplete = true;
+        stream.summary = msg.summary;
+        if (!stream.started) {
+          stream.started = true;
+          setStreamingIndicator(msgProfile, "streaming");
         }
-
-        updateSummary(format(msg.summary));
+        if (stream.thinking && !stream.thinkingComplete) {
+          stream.thinkingComplete = true;
+          if (isCurrent) collapseThinking();
+        }
+        if (isCurrent) {
+          lastMessage = msg.summary;
+          updateSummary(format(msg.summary));
+        }
         break;
 
       case "GPT_DONE":
-        const model = msg.model;
-        setSummary(lastMessage, model);
-        working = false;
-        showModelFooter();
+        stream.working = false;
+        setStreamingIndicator(msgProfile, false);
+        // Save to this profile's cache (uses msg.profile, not currentProfile)
+        await saveSummary(stream.summary, msg.model, msgProfile, stream.thinking);
+        await updateProfileCacheIndicator(msgProfile);
 
-        // Reset thinking state for next request
-        isThinkingComplete = false;
-
-        // Update cache indicator for current profile
-        await updateProfileCacheIndicator(currentProfile);
+        if (isCurrent) {
+          lastMessage = stream.summary;
+          currentModelName = msg.model;
+          showModelFooter();
+        }
+        stream.thinkingComplete = false;
         break;
 
       case "GPT_ERROR":
-        reportError(msg.error);
-        working = false;
-        hideModelFooter();
-
-        // Reset thinking state on error
-        clearThinking();
-        isThinkingComplete = false;
+        stream.working = false;
+        setStreamingIndicator(msgProfile, false);
+        if (isCurrent) {
+          reportError(msg.error);
+          hideModelFooter();
+          clearThinking();
+        }
+        delete streams[msgProfile];
         break;
 
       default:
-        reportError("Failed to fetch summary.");
-        working = false;
+        if (isCurrent) reportError("Failed to fetch summary.");
         break;
     }
   }
@@ -416,42 +436,61 @@ document.addEventListener("DOMContentLoaded", async function () {
     // Save the selected profile name locally
     await chrome.storage.local.set({ lastUsedProfile: selectedProfileName });
 
-    // Check if cached summary exists for this profile+URL
-    const cached = await restoreSummary();
+    // Check if this profile has an active stream in progress
+    const stream = streams[selectedProfileName];
 
-    if (cached) {
-      // Restore complete cached state - no active work
-      hideModelFooter();
-      lastMessage = cached.summary;
-      updateSummary(format(cached.summary));
-
-      // Restore thinking if it exists
-      if (cached.thinking) {
-        lastThinking = cached.thinking;
-        updateThinking(cached.thinking);
-        collapseThinking();
-        isThinkingComplete = true;
+    if (stream && stream.working) {
+      // Active stream — show its current state
+      if (stream.thinking) {
+        updateThinking(stream.thinking);
+        if (stream.thinkingComplete) {
+          collapseThinking();
+        }
       } else {
         clearThinking();
       }
 
-      // Scroll to top after restoration
-      requestAnimationFrame(() => {
-        window.scrollTo(0, 0);
-      });
+      if (stream.summary) {
+        lastMessage = stream.summary;
+        hideModelFooter();
+        updateSummary(format(stream.summary));
+      } else {
+        await showModelWorking(selectedProfileName);
+      }
     } else {
-      // No cache - automatically start summarization
-      clearThinking();
-      lastMessage = null;
-      lastThinking = null;
-      isThinkingComplete = false;
-      working = true;
-      await showModelWorking(selectedProfileName);
-      requestNewSummary();
-    }
+      // No active stream — check cache
+      const cached = await restoreSummary();
 
-    const profileKey = `profile__${selectedProfileName}`;
-    const profileData = await chrome.storage.sync.get(profileKey);
+      if (cached) {
+        hideModelFooter();
+        lastMessage = cached.summary;
+        updateSummary(format(cached.summary));
+
+        if (cached.thinking) {
+          updateThinking(cached.thinking);
+          collapseThinking();
+        } else {
+          clearThinking();
+        }
+
+        requestAnimationFrame(() => {
+          window.scrollTo(0, 0);
+        });
+      } else {
+        // No cache — start new summarization
+        clearThinking();
+        lastMessage = null;
+        const newStream = getStream(selectedProfileName);
+        newStream.working = true;
+        newStream.summary = null;
+        newStream.thinking = null;
+        newStream.thinkingComplete = false;
+        newStream.started = false;
+        setStreamingIndicator(selectedProfileName, "waiting");
+        await showModelWorking(selectedProfileName);
+        requestNewSummary();
+      }
+    }
   }
 
   // Initial call to load profiles
@@ -516,6 +555,33 @@ document.addEventListener("DOMContentLoaded", async function () {
     return !!(profileCache && profileCache[url]);
   }
 
+  function findProfileButton(profileName) {
+    const buttons = profileContainer.getElementsByClassName("btn");
+    for (const button of buttons) {
+      const buttonText = button.textContent.replace(/^●\s*/, '').trim();
+      if (buttonText === profileName) return button;
+    }
+    return null;
+  }
+
+  // state: "waiting" (grey), "streaming" (orange pulsing), or false (remove)
+  function setStreamingIndicator(profileName, state) {
+    const button = findProfileButton(profileName);
+    if (!button) return;
+
+    const existingDot = button.querySelector('.profile-dot-waiting, .profile-dot-streaming, span[style*="color"]');
+
+    if (state) {
+      if (existingDot) existingDot.remove();
+      const dot = document.createElement("span");
+      dot.textContent = "● ";
+      dot.className = state === "streaming" ? "profile-dot-streaming" : "profile-dot-waiting";
+      button.insertBefore(dot, button.firstChild);
+    } else if (existingDot && (existingDot.classList.contains('profile-dot-streaming') || existingDot.classList.contains('profile-dot-waiting'))) {
+      existingDot.remove();
+    }
+  }
+
   async function updateProfileCacheIndicator(profileName) {
     const buttons = profileContainer.getElementsByClassName("btn");
 
@@ -541,23 +607,21 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   }
 
-  async function setSummary(summary, model) {
+  async function saveSummary(summary, model, profileName, thinking) {
     const url = await getOriginalTabUrl();
     const config = await chrome.storage.local.get("results");
 
     let results = config.results || {};
 
-    // Use profile as top-level key
-    const profileKey = `profile__${currentProfile}`;
+    const profileKey = `profile__${profileName}`;
     if (!results[profileKey]) {
       results[profileKey] = {};
     }
 
-    // Save summary with thinking content and timestamp
     results[profileKey][url] = {
       model: model,
       summary: summary,
-      thinking: lastThinking || null,
+      thinking: thinking || null,
       timestamp: Date.now()
     };
 
@@ -632,9 +696,6 @@ document.addEventListener("DOMContentLoaded", async function () {
       thinkingContent.innerHTML = "";
       thinkingContent.classList.remove("visually-hidden");
       thinkingCollapsed.classList.add("visually-hidden");
-
-      // Reset global state
-      lastThinking = null;
     });
   }
 
@@ -648,8 +709,9 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   async function requestNewSummary() {
     // Reset thinking state before new request
-    lastThinking = null;
-    isThinkingComplete = false;
+    const stream = getStream(currentProfile);
+    stream.thinking = null;
+    stream.thinkingComplete = false;
     clearThinking();
 
     const url = await getOriginalTabUrl();
@@ -665,7 +727,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       .catch((error) => {
         reportError(error);
         clearSummary();
-        working = false;
+        stream.working = false;
       });
   }
 });

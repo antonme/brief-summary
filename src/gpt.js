@@ -274,24 +274,24 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
   }
 }
 
-function gptError(port, error) {
+function gptError(port, error, profileName) {
   console.error('Sending error:', error);
-  port.postMessage({ action: 'GPT_ERROR', error: error });
+  port.postMessage({ action: 'GPT_ERROR', error: error, profile: profileName });
 }
 
-function gptMessage(port, summary) {
+function gptMessage(port, summary, profileName) {
   console.log('Sending message:', summary.slice(-50)); // Log last 50 chars
-  port.postMessage({ action: 'GPT_MESSAGE', summary: summary });
+  port.postMessage({ action: 'GPT_MESSAGE', summary: summary, profile: profileName });
 }
 
-function gptThinking(port, thinking) {
+function gptThinking(port, thinking, profileName) {
   console.log('Sending thinking:', thinking.slice(-50)); // Log last 50 chars
-  port.postMessage({ action: 'GPT_THINKING', thinking: thinking });
+  port.postMessage({ action: 'GPT_THINKING', thinking: thinking, profile: profileName });
 }
 
-function gptDone(port, model, summary) {
+function gptDone(port, model, summary, profileName) {
   console.log('Sending done signal');
-  port.postMessage({ action: 'GPT_DONE', model: model, summary: summary });
+  port.postMessage({ action: 'GPT_DONE', model: model, summary: summary, profile: profileName });
 }
 
 //------------------------------------------------------------------------------
@@ -335,7 +335,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
                     useXaiApi ? ERR_XAI_API_KEY :
                     ERR_OPENAI_KEY;
     console.error('API Key Error:', errorMsg);
-    gptError(port, errorMsg);
+    gptError(port, errorMsg, profileName);
     return;
   }
 
@@ -573,14 +573,14 @@ export async function fetchAndStream(port, messages, model, profileName) {
                   const thinkingText = parsed.delta.thinking || '';
                   thinkingBuffer += thinkingText;
                   summary += thinkingText;  // For backward compatibility
-                  gptThinking(port, thinkingBuffer);
+                  gptThinking(port, thinkingBuffer, profileName);
                 }
                 else if (deltaType === 'text_delta') {
                   // Accumulate output content
                   const textContent = parsed.delta.text || '';
                   outputBuffer += textContent;
                   summary += textContent;  // For backward compatibility
-                  gptMessage(port, outputBuffer);
+                  gptMessage(port, outputBuffer, profileName);
                 }
                 // Ignore signature_delta - just for verification
               }
@@ -614,13 +614,13 @@ export async function fetchAndStream(port, messages, model, profileName) {
                   console.log('Gemini thinking detected:', text.substring(0, 50) + '...');
                   thinkingBuffer += text;
                   summary += text;  // For backward compatibility
-                  gptThinking(port, thinkingBuffer);
+                  gptThinking(port, thinkingBuffer, profileName);
                 } else {
                   // This is regular output (thought === false or undefined)
                   console.log('Gemini output detected:', text.substring(0, 50) + '...');
                   outputBuffer += text;
                   summary += text;  // For backward compatibility
-                  gptMessage(port, outputBuffer);
+                  gptMessage(port, outputBuffer, profileName);
                 }
               }
 
@@ -637,7 +637,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
               const content = parsed.choices[0]?.delta?.content || '';
               if (content) {
                 summary += content;
-                gptMessage(port, summary);
+                gptMessage(port, summary, profileName);
               }
 
               // Check for citations (Perplexity returns these)
@@ -650,7 +650,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
               const content = parsed.choices[0]?.delta?.content || '';
               if (content) {
                 summary += content;
-                gptMessage(port, summary);
+                gptMessage(port, summary, profileName);
               }
             } else if (useXaiApi) {
               // Handle xAI Responses API streaming format
@@ -674,7 +674,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 if (textDelta) {
                   outputBuffer += textDelta;
                   summary += textDelta;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
                 }
               }
               // Handle final text output
@@ -683,7 +683,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 if (finalText && finalText.length > outputBuffer.length) {
                   outputBuffer = finalText;
                   summary = thinkingBuffer + finalText;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
                 }
               }
               // Handle reasoning/thinking content
@@ -693,7 +693,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 if (reasoningDelta) {
                   thinkingBuffer += reasoningDelta;
                   summary += reasoningDelta;
-                  gptThinking(port, thinkingBuffer);
+                  gptThinking(port, thinkingBuffer, profileName);
                 }
               }
               // Fallback: OpenAI-compatible choices format
@@ -705,12 +705,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 if (reasoning) {
                   thinkingBuffer += reasoning;
                   summary += reasoning;
-                  gptThinking(port, thinkingBuffer);
+                  gptThinking(port, thinkingBuffer, profileName);
                 }
                 if (content) {
                   outputBuffer += content;
                   summary += content;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
                 }
               }
             } else {
@@ -718,7 +718,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
               const content = parsed.choices[0]?.delta?.content || '';
               if (content) {
                 summary += content;
-                gptMessage(port, summary);
+                gptMessage(port, summary, profileName);
               }
             }
           } catch (e) {
@@ -735,12 +735,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
       if (useXaiApi) {
         finalContent = transformCitationsToDomains(finalContent, xaiCitationsMap);
       }
-      gptDone(port, model, finalContent);
+      gptDone(port, model, finalContent, profileName);
     } else {
       throw new Error('No content received from API');
     }
   } catch (error) {
     console.error('Stream error:', error);
-    gptError(port, error.message);
+    gptError(port, error.message, profileName);
   }
 }
