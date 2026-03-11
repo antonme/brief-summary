@@ -22,9 +22,47 @@ const ERR_GOOGLE_API_KEY = 'Error: Google API key is not set';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const ERR_OPENROUTER_API_KEY = 'Error: OpenRouter API key is not set';
 
-// Add new constants for xAI
-const XAI_ENDPOINT = 'https://api.x.ai/v1/chat/completions';
+// Add new constants for xAI (Responses API required for web_search tool)
+const XAI_ENDPOINT = 'https://api.x.ai/v1/responses';
 const ERR_XAI_API_KEY = 'Error: xAI API key is not set';
+
+/*------------------------------------------------------------------------------
+ * Transforms xAI citations from numbered format to domain-based format.
+ * Uses a citations map to replace [1], [2] etc. with superscript linked domains.
+ * Output format: <sup><a href="url">[domain]</a></sup> with thin space for separation
+ *----------------------------------------------------------------------------*/
+function transformCitationsToDomains(text, citationsMap = {}) {
+  // First, handle any inline citations with URLs: [[1]](url) or [1](url)
+  let result = text.replace(/\[?\[(\d+)\]\]?\((https?:\/\/[^)]+)\)/g, (match, num, url) => {
+    try {
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname.replace(/^www\./, '');
+      // Add thin space after for separation when multiple citations are adjacent
+      return `<sup><a href="${url}" target="_blank" title="${url}">[${domain}]</a></sup> `;
+    } catch (e) {
+      return match;
+    }
+  });
+
+  // Then, handle plain numbered references [1], [2] using the citations map
+  // Only match [number] that's NOT already followed by (url)
+  result = result.replace(/\[(\d+)\](?!\()/g, (match, num) => {
+    const url = citationsMap[num];
+    if (url) {
+      try {
+        const urlObj = new URL(url);
+        const domain = urlObj.hostname.replace(/^www\./, '');
+        // Add thin space after for separation when multiple citations are adjacent
+        return `<sup><a href="${url}" target="_blank" title="${url}">[${domain}]</a></sup> `;
+      } catch (e) {
+        return match;
+      }
+    }
+    return match;
+  });
+
+  return result;
+}
 
 /*------------------------------------------------------------------------------
  * Builds up a buffer of JSON data and returns the parsed JSON object once
@@ -398,22 +436,23 @@ export async function fetchAndStream(port, messages, model, profileName) {
       stream: true
     };
   } else if (useXaiApi) {
-    // Format payload for xAI API (OpenAI-compatible with search)
+    // Format payload for xAI Responses API
+    // Responses API uses 'input' for messages and 'instructions' for system prompt
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const nonSystemMessages = messages.filter(m => m.role !== 'system');
+
     payload = {
       model: profile.model,
-      messages: messages,
-      stream: true
-    };
-
-    // Enable search capabilities for Grok models
-    // Web and X/Twitter search via search_parameters
-    payload.search_parameters = {
-      mode: 'auto',  // Model decides when to search
-      sources: [
-        { type: 'web' },
-        { type: 'x' }
+      input: nonSystemMessages,
+      stream: true,
+      tools: [
+        { type: 'web_search' }
       ]
     };
+
+    if (systemMessage) {
+      payload.instructions = systemMessage;
+    }
   } else {
     // Format payload for OpenAI API
     payload = {
@@ -500,6 +539,9 @@ export async function fetchAndStream(port, messages, model, profileName) {
     let thinkingBuffer = '';
     let outputBuffer = '';
     let currentBlockType = null;
+
+    // xAI citations map: citation number -> URL
+    const xaiCitationsMap = {};
 
     while (connected) {
       const { value, done } = await reader.read();
@@ -611,39 +653,65 @@ export async function fetchAndStream(port, messages, model, profileName) {
                 gptMessage(port, summary);
               }
             } else if (useXaiApi) {
-              // Handle xAI streaming format (OpenAI-compatible with reasoning)
-              const delta = parsed.choices[0]?.delta;
+              // Handle xAI Responses API streaming format
+              const eventType = parsed.type;
 
-              // Debug: Log the entire delta object to see what fields are present
-              if (delta && Object.keys(delta).length > 0) {
-                console.log('xAI delta object:', JSON.stringify(delta, null, 2));
+              // Collect citations from response
+              if (parsed.citations && Array.isArray(parsed.citations)) {
+                parsed.citations.forEach((url, index) => {
+                  xaiCitationsMap[index + 1] = url;
+                });
+              }
+              if (eventType === 'response.completed' && parsed.response?.citations) {
+                parsed.response.citations.forEach((url, index) => {
+                  xaiCitationsMap[index + 1] = url;
+                });
               }
 
-              // Handle reasoning content (for grok-*-reasoning models)
-              // Check multiple possible field names for reasoning
-              const reasoningContent = delta?.reasoning_content || delta?.thinking || '';
-              if (reasoningContent) {
-                console.log('xAI reasoning chunk received:', reasoningContent.substring(0, 50) + '...');
-                thinkingBuffer += reasoningContent;
-                summary += reasoningContent;  // For backward compatibility
-                gptThinking(port, thinkingBuffer);
+              // Handle text output delta
+              if (eventType === 'response.output_text.delta') {
+                const textDelta = parsed.delta || '';
+                if (textDelta) {
+                  outputBuffer += textDelta;
+                  summary += textDelta;
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                }
               }
+              // Handle final text output
+              else if (eventType === 'response.output_text.done') {
+                const finalText = parsed.text || '';
+                if (finalText && finalText.length > outputBuffer.length) {
+                  outputBuffer = finalText;
+                  summary = thinkingBuffer + finalText;
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                }
+              }
+              // Handle reasoning/thinking content
+              else if (eventType === 'response.reasoning_summary_text.delta' ||
+                       eventType === 'response.reasoning.delta') {
+                const reasoningDelta = parsed.delta || '';
+                if (reasoningDelta) {
+                  thinkingBuffer += reasoningDelta;
+                  summary += reasoningDelta;
+                  gptThinking(port, thinkingBuffer);
+                }
+              }
+              // Fallback: OpenAI-compatible choices format
+              else if (parsed.choices?.[0]?.delta) {
+                const delta = parsed.choices[0].delta;
+                const content = delta.content || '';
+                const reasoning = delta.reasoning_content || '';
 
-              // Handle regular output content
-              const content = delta?.content || '';
-              if (content) {
-                console.log('xAI content chunk received:', content.substring(0, 50) + '...');
-                outputBuffer += content;
-                summary += content;  // For backward compatibility
-                gptMessage(port, outputBuffer);
-              }
-
-              // Log search usage and reasoning token information
-              if (parsed.usage?.num_sources_used) {
-                console.log('xAI search sources used:', parsed.usage.num_sources_used);
-              }
-              if (parsed.usage?.completion_tokens_details?.reasoning_tokens) {
-                console.log('xAI reasoning tokens:', parsed.usage.completion_tokens_details.reasoning_tokens);
+                if (reasoning) {
+                  thinkingBuffer += reasoning;
+                  summary += reasoning;
+                  gptThinking(port, thinkingBuffer);
+                }
+                if (content) {
+                  outputBuffer += content;
+                  summary += content;
+                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap));
+                }
               }
             } else {
               // Handle OpenAI streaming format
@@ -661,8 +729,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
     }
 
     // Send done message with output buffer (or full summary for backward compatibility)
-    const finalContent = outputBuffer || summary;
+    let finalContent = outputBuffer || summary;
     if (finalContent) {
+      // Transform xAI citations to domain-based format in final output
+      if (useXaiApi) {
+        finalContent = transformCitationsToDomains(finalContent, xaiCitationsMap);
+      }
       gptDone(port, model, finalContent);
     } else {
       throw new Error('No content received from API');
