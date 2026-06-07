@@ -19,7 +19,7 @@ Page Summarizer is a Chrome / Firefox extension (Manifest V3) that turns the con
 
 > Based on [sysread/page-summarizer](https://github.com/sysread/page-summarizer), substantially extended with multi-provider support, streaming reasoning, profiles, and per-page caching.
 
-## ✨ Features
+## Features
 
 - **Six LLM providers, one UI** — OpenAI, Anthropic, Google, Perplexity, xAI, and OpenRouter, auto-routed by model id.
 - **Live streaming** — summaries render token-by-token; no waiting for the whole response.
@@ -32,7 +32,7 @@ Page Summarizer is a Chrome / Firefox extension (Manifest V3) that turns the con
 - **Editable model field** — pick from curated presets or type any model id the provider supports.
 - **Import / export profiles** — back up or share your configuration as JSON.
 
-## 🤖 Supported providers & models
+## Supported providers & models
 
 Routing is by model-id prefix, and the model field is editable — the lists below are the curated presets shipped in the options UI.
 
@@ -45,7 +45,7 @@ Routing is by model-id prefix, and the model field is editable — the lists bel
 | **xAI** | Responses API | Grok 4.3, Grok 4.1 Fast (reasoning / non‑reasoning) | Live web search + citations |
 | **OpenRouter** | Chat Completions | DeepSeek V4 Pro, Kimi K2.6, GLM‑5 Turbo, Qwen3.7‑Max | Access frontier open models through one key |
 
-## 📦 Installation
+## Installation
 
 ### Chrome / Edge / Brave
 1. Clone or download this repository.
@@ -59,7 +59,7 @@ web-ext build        # produces a zip in web-ext-artifacts/
 ```
 Or load it temporarily: open `about:debugging` → **This Firefox** → **Load Temporary Add-on…** and select `manifest.json`.
 
-## ⚙️ Configuration
+## Configuration
 
 Open the extension's **Options** page (right-click the toolbar icon → *Options*, or the gear in the popup) and:
 
@@ -70,7 +70,7 @@ Open the extension's **Options** page (right-click the toolbar icon → *Options
 
 You only need keys for the providers whose models you actually select.
 
-## 🧠 Thinking & effort
+## Thinking & effort
 
 Each profile exposes a thinking-effort control whose options adapt to the selected model:
 
@@ -79,14 +79,14 @@ Each profile exposes a thinking-effort control whose options adapt to the select
 - **Gemini 3.x** — `minimal / low / medium / high` via `thinkingLevel`.
 - **Grok / Sonar** — provider defaults.
 
-## 🚀 Usage
+## Usage
 
 1. Navigate to any article or PDF.
 2. Click the Page Summarizer toolbar icon.
 3. Pick a profile (or use your default) — the summary streams in, with reasoning shown above it when available.
 4. Use the **copy** button to grab the summary, or switch profiles to compare models. Results are cached per page and profile.
 
-## 🏗️ Architecture
+## Architecture
 
 The extension uses a message-passing architecture between a service-worker background script and the popup over named `chrome.runtime` ports.
 
@@ -100,6 +100,6 @@ The extension uses a message-passing architecture between a service-worker backg
 
 See [`CLAUDE.md`](CLAUDE.md) for a deeper architecture overview and contributor notes.
 
-## 🙏 Credits
+## Credits
 
 Originally based on [sysread/page-summarizer](https://github.com/sysread/page-summarizer). Icon and multi-provider rework by [@antonme](https://github.com/antonme).
