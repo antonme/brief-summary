@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function buildDefaultProfile() {
     return {
-      model: 'gpt-4o-mini',
+      model: 'claude-opus-4-8',
       customPrompts: '',
       systemMessage: ''
     };
@@ -269,7 +269,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentProfile = profile;
       document.getElementById('profileSelector').value = profile;
       document.getElementById('name').value = profile;
-      document.getElementById('model').value = data.model || 'claude-sonnet-4-6';
+      document.getElementById('model').value = data.model || 'claude-opus-4-8';
       // Try to match the selector; if no match, it stays on whatever was selected
       const selector = document.getElementById('modelSelector');
       const hasOption = Array.from(selector.options).some(o => o.value === data.model);
@@ -281,6 +281,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       // Remove API key loading from profile selection
       updateCustomPromptsCounter();
+      updateEffortControl();
       return;
     }
 
@@ -304,10 +305,108 @@ document.addEventListener('DOMContentLoaded', async () => {
     showStatus(msg, 'success');
   }
 
+  // Per-provider option lists for the thinking-effort control.
+  // Each provider has different supported values:
+  //   - GPT-5+ / o-series: `reasoning_effort` accepts none|low|medium|high|xhigh (no max)
+  //   - Claude: `output_config.effort` accepts low|medium|high|max; Opus 4.7 adds xhigh;
+  //     max is Opus-tier only; Haiku 4.5 errors on any effort value
+  //   - Gemini: numeric `thinkingBudget` — labels show token counts
+  // Returns null for models that don't accept any effort/budget parameter.
+  function getEffortOptions(modelId) {
+    if (!modelId) return null;
+
+    if (modelId.startsWith('gpt-5') || /^o\d/.test(modelId)) {
+      return [
+        { value: 'off',     label: 'Off (no reasoning)' },
+        { value: 'low',     label: 'Low' },
+        { value: 'medium',  label: 'Medium' },
+        { value: 'high',    label: 'High' },
+        { value: 'xhigh',   label: 'Extra High' },
+        { value: 'dynamic', label: 'Dynamic (default: medium)' },
+      ];
+    }
+
+    if (modelId.startsWith('claude-')) {
+      if (modelId.includes('haiku')) {
+        // Haiku 4.5 errors on any effort value — only the off/adaptive endpoints work.
+        return [
+          { value: 'off',     label: 'Off' },
+          { value: 'dynamic', label: 'Dynamic (adaptive)' },
+        ];
+      }
+      // `xhigh` is supported on Opus 4.7 and Opus 4.8 (not Sonnet/Haiku).
+      // `max` is Opus-tier only.
+      const supportsXhigh = modelId.includes('opus-4-7') || modelId.includes('opus-4-8');
+      const isOpus = modelId.includes('opus');
+      const opts = [
+        { value: 'off',    label: 'Off' },
+        { value: 'low',    label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high',   label: 'High' },
+      ];
+      if (supportsXhigh) opts.push({ value: 'xhigh', label: 'Extra High' });
+      if (isOpus)        opts.push({ value: 'max',   label: 'Max' });
+      opts.push({ value: 'dynamic', label: 'Dynamic (adaptive)' });
+      return opts;
+    }
+
+    if (modelId.startsWith('gemini-')) {
+      // Gemini 3.x uses `thinkingLevel` (minimal|low|medium|high) — no token
+      // budget. Older Gemini 2.5 still uses the numeric `thinkingBudget`.
+      if (modelId.startsWith('gemini-3')) {
+        return [
+          { value: 'off',     label: 'Minimal' },
+          { value: 'low',     label: 'Low' },
+          { value: 'medium',  label: 'Medium' },
+          { value: 'high',    label: 'High' },
+          { value: 'dynamic', label: 'Dynamic (model default)' },
+        ];
+      }
+      // Legacy Gemini 2.5: `thinkingBudget` is a token count — show it in the label.
+      return [
+        { value: 'off',     label: 'Off' },
+        { value: 'low',     label: 'Low (2k tokens)' },
+        { value: 'medium',  label: 'Medium (10k tokens)' },
+        { value: 'high',    label: 'High (32k tokens)' },
+        { value: 'xhigh',   label: 'Extra High (60k tokens)' },
+        { value: 'max',     label: 'Max (100k tokens)' },
+        { value: 'dynamic', label: 'Dynamic (model decides)' },
+      ];
+    }
+
+    return null;
+  }
+
+  function updateEffortControl() {
+    const modelId = document.getElementById('model').value.trim();
+    const container = document.getElementById('thinkingEffortContainer');
+    const select = document.getElementById('thinkingEffort');
+    const options = getEffortOptions(modelId);
+
+    if (!options) {
+      container.classList.add('d-none');
+      return;
+    }
+
+    const previousValue = select.value;
+    select.innerHTML = '';
+    for (const opt of options) {
+      select.appendChild(new Option(opt.label, opt.value));
+    }
+    // Preserve the user's selection if it's still available for this model;
+    // otherwise fall back to dynamic so the displayed value is honest.
+    select.value = options.some(o => o.value === previousValue) ? previousValue : 'dynamic';
+    container.classList.remove('d-none');
+  }
+
   // When model selector changes, populate the model text field
   document.getElementById('modelSelector').addEventListener('change', (e) => {
     document.getElementById('model').value = e.target.value;
+    updateEffortControl();
   });
+
+  // Direct edits to the freeform model id field also need to refresh the control
+  document.getElementById('model').addEventListener('input', updateEffortControl);
 
   // Update form inputs when profile is changed
   profileSelector.addEventListener('change', (e) => {

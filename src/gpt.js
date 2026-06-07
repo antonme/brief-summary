@@ -26,6 +26,12 @@ const ERR_OPENROUTER_API_KEY = 'Error: OpenRouter API key is not set';
 const XAI_ENDPOINT = 'https://api.x.ai/v1/responses';
 const ERR_XAI_API_KEY = 'Error: xAI API key is not set';
 
+// OpenAI Responses API — used for GPT-5+ and o-series reasoning models so that
+// `response.reasoning_summary_text.delta` events stream visible thinking
+// progress. Chat Completions stays as the fallback for legacy GPT models
+// (gpt-4o-mini, gpt-4-turbo, etc.) that don't need reasoning streaming.
+const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
+
 /*------------------------------------------------------------------------------
  * Transforms xAI citations from numbered format to domain-based format.
  * Uses a citations map to replace [1], [2] etc. with superscript linked domains.
@@ -173,7 +179,7 @@ function GptResponseReader(response) {
 }
 
 // Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
-async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '') {
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '', useOpenAIResponsesApi = false) {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -257,6 +263,23 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
       headers: headers,
       body: JSON.stringify(payload)
     });
+  } else if (useOpenAIResponsesApi) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    // Hint intermediate proxies/CDNs to forward the response as event-stream
+    // rather than buffering it as a single body.
+    headers['Accept'] = 'text/event-stream';
+
+    console.log('Sending request to OpenAI Responses API:', {
+      endpoint: OPENAI_RESPONSES_ENDPOINT,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(OPENAI_RESPONSES_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
   } else {
     headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -317,6 +340,13 @@ export async function fetchAndStream(port, messages, model, profileName) {
   const useGoogleApi = model.startsWith('gemini-');
   const useOpenRouterApi = model.startsWith('openrouter/');
   const useXaiApi = model.startsWith('grok-');
+  // GPT-5+ and o-series go through OpenAI's modern Responses API so reasoning
+  // streams visibly via `response.reasoning_summary_text.delta` events.
+  // Legacy GPT models (gpt-4o-mini, gpt-4-turbo, search variants) stay on the
+  // older Chat Completions endpoint as the final fallthrough.
+  const useOpenAIResponsesApi = !useAnthropicApi && !usePerplexityApi && !useGoogleApi &&
+                                !useOpenRouterApi && !useXaiApi &&
+                                (model.startsWith('gpt-5') || /^o\d/.test(model));
 
   // Select appropriate API key from global keys
   const selectedApiKey = useAnthropicApi ? anthropicApiKey :
@@ -359,15 +389,23 @@ export async function fetchAndStream(port, messages, model, profileName) {
   });
 
 
-  // Map thinking effort to token budgets (-1 = dynamic)
-  const effortToBudget = { off: 0, low: 2000, medium: 10000, high: 32000, max: 100000, dynamic: -1 };
+  // Map thinking effort to token budgets (-1 = dynamic). Used by Gemini.
+  // Anthropic uses the adaptive-thinking + `effort` parameter instead — see below.
+  const effortToBudget = { off: 0, low: 2000, medium: 10000, high: 32000, xhigh: 60000, max: 100000, dynamic: -1 };
   const thinkingBudget = effortToBudget[profile.thinkingEffort] ?? -1;
 
   let payload;
   if (useAnthropicApi) {
-    // Format payload for Anthropic API
+    // Format payload for Anthropic API (Opus 4.6/4.7/4.8, Sonnet 4.6).
+    // Opus 4.7/4.8 reject `thinking: {type: "enabled", budget_tokens: N}` with 400 —
+    // adaptive thinking is the only supported mode. Effort goes inside `output_config`.
     const systemMessage = messages.find(m => m.role === 'system')?.content || '';
     const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n\n');
+
+    // Higher max_tokens for high/xhigh/max effort to leave room for thinking + output.
+    // Opus 4.7+ also count tokens slightly higher than 4.6, so leave headroom.
+    const uiEffort = profile.thinkingEffort;
+    const maxTokensByEffort = { off: 8000, low: 8000, medium: 16000, high: 32000, xhigh: 48000, max: 64000, dynamic: 16000 };
 
     payload = {
       model: profile.model,
@@ -377,25 +415,39 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }],
       system: systemMessage,
       stream: true,
-      max_tokens: thinkingBudget > 0 ? thinkingBudget + 8000 : (thinkingBudget === -1 ? 16000 : 8000),
+      max_tokens: maxTokensByEffort[uiEffort] ?? 16000,
     };
 
-    if (thinkingBudget !== 0) {
-      payload.thinking = {
-        type: "enabled",
-        // Claude has no native dynamic mode; use 10k as a reasonable default
-        budget_tokens: thinkingBudget === -1 ? 10000 : thinkingBudget
-      };
+    if (uiEffort === 'off') {
+      payload.thinking = { type: 'disabled' };
+    } else {
+      // `display: "summarized"` is required on Opus 4.7/4.8 to keep thinking text
+      // streaming to the UI — the new default is "omitted" (empty thinking_delta).
+      payload.thinking = { type: 'adaptive', display: 'summarized' };
+
+      if (uiEffort && uiEffort !== 'dynamic') {
+        // Effort gating:
+        //   - `max` is Opus-tier only — downgrade to `high` on Sonnet/Haiku.
+        //   - `xhigh` is Opus 4.7/4.8 only — downgrade to `high` on every other Claude model.
+        const isOpus = profile.model.includes('opus');
+        const supportsXhigh = profile.model.includes('opus-4-7') || profile.model.includes('opus-4-8');
+        let effortValue = uiEffort;
+        if (effortValue === 'max' && !isOpus) effortValue = 'high';
+        if (effortValue === 'xhigh' && !supportsXhigh) effortValue = 'high';
+        payload.output_config = { effort: effortValue };
+      }
+      // 'dynamic' → omit effort; API defaults to 'high' with adaptive thinking.
     }
   } else if (usePerplexityApi) {
-    // Format payload for Perplexity API with web search (built-in)
+    // Format payload for Perplexity API with web search (built-in).
+    // NOTE: `search_mode` only accepts web|academic|sec (default web) — the old
+    // value 'medium' was invalid. The balanced-depth control is a separate
+    // parameter: web_search_options.search_context_size (low|medium|high).
     payload = {
       model: profile.model,
       messages: messages,
       stream: true,
-      // Perplexity models have built-in web search
-      // Use 'medium' search mode for balanced performance
-      search_mode: 'medium'
+      web_search_options: { search_context_size: 'medium' }
     };
   } else if (useGoogleApi) {
     // Format payload for Google Gemini API
@@ -414,18 +466,32 @@ export async function fetchAndStream(port, messages, model, profileName) {
       contents[0].parts[0].text = systemMessage + '\n\n' + contents[0].parts[0].text;
     }
 
+    // Thinking control differs by Gemini generation:
+    //   - Gemini 3.x: `thinkingLevel` (minimal|low|medium|high). The numeric
+    //     `thinkingBudget` is discouraged on 3.x ("may cause unexpected
+    //     performance") and the two are mutually exclusive.
+    //   - Gemini 2.5: numeric `thinkingBudget` (0 disables, -1 = dynamic).
+    let thinkingConfig;
+    if (profile.model.startsWith('gemini-3')) {
+      // Map the shared effort vocabulary onto Gemini 3 thinking levels.
+      // 'dynamic' (and anything unmapped) → omit level so the model uses its
+      // own default (medium for Flash, high for Pro).
+      const effortToLevel = { off: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' };
+      const level = effortToLevel[profile.thinkingEffort];
+      thinkingConfig = { includeThoughts: true, ...(level ? { thinkingLevel: level } : {}) };
+    } else if (thinkingBudget !== 0) {
+      // -1 = Gemini's native dynamic mode; positive = fixed budget.
+      thinkingConfig = { thinkingBudget: thinkingBudget, includeThoughts: true };
+    }
+
     payload = {
       contents: contents,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 8192,
-        ...(thinkingBudget !== 0 ? {
-          thinkingConfig: {
-            // -1 = Gemini's native dynamic mode; positive = fixed budget
-            thinkingBudget: thinkingBudget,
-            includeThoughts: true
-          }
-        } : {})
+        // Thinking tokens count toward this limit on Gemini, so leave room for
+        // both reasoning and a full summary at higher thinking levels.
+        maxOutputTokens: 32768,
+        ...(thinkingConfig ? { thinkingConfig } : {})
       },
       // Add Google Search grounding tool
       tools: [{
@@ -443,8 +509,34 @@ export async function fetchAndStream(port, messages, model, profileName) {
       stream: true
     };
   } else if (useXaiApi) {
-    // Format payload for xAI Responses API
-    // Responses API uses 'input' for messages and 'instructions' for system prompt
+    // Format payload for xAI Responses API (grok-*).
+    // Per xAI docs the system prompt is a {role:'system'} entry INSIDE the
+    // `input` array — NOT a top-level `instructions` field (current Grok models
+    // can silently ignore `instructions`). Keep the system message first.
+    const systemMessage = messages.find(m => m.role === 'system')?.content || '';
+    const input = [];
+    if (systemMessage) {
+      input.push({ role: 'system', content: systemMessage });
+    }
+    for (const m of messages.filter(m => m.role !== 'system')) {
+      input.push(m);
+    }
+
+    payload = {
+      model: profile.model,
+      input: input,
+      stream: true,
+      tools: [
+        { type: 'web_search' }
+      ]
+    };
+  } else if (useOpenAIResponsesApi) {
+    // Format payload for OpenAI Responses API (GPT-5+ and o-series).
+    // - `instructions` carries the system prompt (extracted from messages)
+    // - `input` carries non-system messages
+    // - `reasoning: {effort, summary}` controls thinking depth and
+    //   opts in to `response.reasoning_summary_text.delta` streaming
+    // - `max_output_tokens` caps reasoning + output combined
     const systemMessage = messages.find(m => m.role === 'system')?.content || '';
     const nonSystemMessages = messages.filter(m => m.role !== 'system');
 
@@ -452,16 +544,32 @@ export async function fetchAndStream(port, messages, model, profileName) {
       model: profile.model,
       input: nonSystemMessages,
       stream: true,
-      tools: [
-        { type: 'web_search' }
-      ]
     };
 
     if (systemMessage) {
       payload.instructions = systemMessage;
     }
+
+    const uiEffort = profile.thinkingEffort;
+    if (uiEffort && uiEffort !== 'off') {
+      // Always send effort and summary together — sending only `summary`
+      // without `effort` can cause the API to hang instead of erroring.
+      // `summary: "auto"` is the most compatible value and lets the API
+      // choose detail level based on effort.
+      const effortValue = (uiEffort === 'dynamic' || !uiEffort)
+        ? 'medium'
+        : (uiEffort === 'max' ? 'xhigh' : uiEffort);
+      payload.reasoning = { effort: effortValue, summary: 'auto' };
+    }
+    // For 'off': omit `reasoning` entirely. OpenAI's no-reasoning default
+    // is what we want, and avoids edge cases with `effort: "none"`.
+
+    // Bound reasoning + output combined to prevent runaway thinking on xhigh.
+    const maxByEffort = { off: 4000, low: 8000, medium: 16000, high: 24000, xhigh: 32000, max: 32000, dynamic: 16000 };
+    payload.max_output_tokens = maxByEffort[uiEffort] ?? 16000;
   } else {
-    // Format payload for OpenAI API
+    // Legacy OpenAI Chat Completions for non-reasoning models
+    // (gpt-4o-mini, gpt-4-turbo, *-search-*, etc.).
     payload = {
       model: profile.model,
       messages: messages,
@@ -517,7 +625,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
   try {
     await debug('PAYLOAD', payload);
 
-    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model);
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model, useOpenAIResponsesApi);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -720,8 +828,49 @@ export async function fetchAndStream(port, messages, model, profileName) {
                   gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
                 }
               }
+            } else if (useOpenAIResponsesApi) {
+              // Handle OpenAI Responses API streaming format.
+              const eventType = parsed.type;
+              console.log('OpenAI Responses event:', eventType, parsed);
+
+              if (eventType === 'response.output_text.delta') {
+                const textDelta = parsed.delta || '';
+                if (textDelta) {
+                  outputBuffer += textDelta;
+                  summary += textDelta;
+                  gptMessage(port, outputBuffer, profileName);
+                }
+              }
+              else if (eventType === 'response.output_text.done') {
+                const finalText = parsed.text || '';
+                if (finalText && finalText.length > outputBuffer.length) {
+                  outputBuffer = finalText;
+                  summary = thinkingBuffer + finalText;
+                  gptMessage(port, outputBuffer, profileName);
+                }
+              }
+              else if (eventType === 'response.reasoning_summary_text.delta' ||
+                       eventType === 'response.reasoning.delta') {
+                const reasoningDelta = parsed.delta || '';
+                if (reasoningDelta) {
+                  thinkingBuffer += reasoningDelta;
+                  summary += reasoningDelta;
+                  gptThinking(port, thinkingBuffer, profileName);
+                }
+              }
+              else if (eventType === 'response.failed' || eventType === 'response.incomplete') {
+                const errMsg = parsed.response?.error?.message || `Response ${eventType.replace('response.', '')}`;
+                throw new Error(errMsg);
+              }
+              else if (eventType === 'error') {
+                // Bare error event (no `response.` prefix) — emitted on
+                // mid-stream errors. Without this branch, the loop would
+                // keep reading until the connection force-closes.
+                const errMsg = parsed.message || parsed.error?.message || 'Stream error';
+                throw new Error(errMsg);
+              }
             } else {
-              // Handle OpenAI streaming format
+              // Handle OpenAI Chat Completions streaming format (legacy GPT)
               const content = parsed.choices[0]?.delta?.content || '';
               if (content) {
                 summary += content;

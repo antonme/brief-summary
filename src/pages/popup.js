@@ -160,22 +160,33 @@ document.addEventListener("DOMContentLoaded", async function () {
   const modelFooter = document.getElementById("modelFooter");
   const modelLabel = document.getElementById("modelLabel");
   let currentModelName = "";
+  let currentEffort = "";
+
+  // Combine model + effort into one label. Hides `dynamic` (the API-default
+  // sentinel) since it has no concrete level to display.
+  function formatModelDisplay() {
+    if (!currentEffort || currentEffort === "dynamic") {
+      return currentModelName;
+    }
+    return `${currentModelName} (${currentEffort})`;
+  }
 
   async function showModelWorking(profileName) {
     const profileKey = `profile__${profileName}`;
     const profileData = await chrome.storage.sync.get(profileKey);
     currentModelName = profileData[profileKey]?.model || "unknown";
+    currentEffort = profileData[profileKey]?.thinkingEffort || "";
     modelFooter.classList.add("visually-hidden");
     updateSummary(
       `<div class="d-flex align-items-center gap-2">` +
         `<div class="thinking-dots"><span></span><span></span><span></span></div>` +
-        `<span class="text-muted">${currentModelName}</span>` +
+        `<span class="text-muted">${formatModelDisplay()}</span>` +
       `</div>`
     );
   }
 
   function showModelFooter() {
-    modelLabel.textContent = currentModelName;
+    modelLabel.textContent = formatModelDisplay();
     modelFooter.classList.remove("visually-hidden");
   }
 
@@ -216,7 +227,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
         break;
 
-      case "GPT_DONE":
+      case "GPT_DONE": {
         stream.working = false;
         setStreamingIndicator(msgProfile, false);
         // Save to this profile's cache (uses msg.profile, not currentProfile)
@@ -226,10 +237,16 @@ document.addEventListener("DOMContentLoaded", async function () {
         if (isCurrent) {
           lastMessage = stream.summary;
           currentModelName = msg.model;
+          // Refresh effort from the message's profile so the footer label is
+          // consistent — the API response gives back the model but not the effort.
+          const donePK = `profile__${msgProfile}`;
+          const doneProfile = await chrome.storage.sync.get(donePK);
+          currentEffort = doneProfile[donePK]?.thinkingEffort || "";
           showModelFooter();
         }
         stream.thinkingComplete = false;
         break;
+      }
 
       case "GPT_ERROR":
         stream.working = false;
