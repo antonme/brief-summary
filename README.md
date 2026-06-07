@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/new_icon_h_128.png" width="112" height="112" alt="Page Summarizer icon" />
+<img src="assets/icon_full.png" width="112" height="112" alt="Page Summarizer icon" />
 
 # Page Summarizer
 
