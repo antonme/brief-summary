@@ -396,16 +396,22 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
   let payload;
   if (useAnthropicApi) {
-    // Format payload for Anthropic API (Opus 4.6/4.7/4.8, Sonnet 4.6).
+    // Format payload for Anthropic API (Fable 5, Opus 4.6/4.7/4.8, Sonnet 4.6).
     // Opus 4.7/4.8 reject `thinking: {type: "enabled", budget_tokens: N}` with 400 —
     // adaptive thinking is the only supported mode. Effort goes inside `output_config`.
     const systemMessage = messages.find(m => m.role === 'system')?.content || '';
     const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n\n');
 
+    // Fable 5: thinking is always on — both `{type: "disabled"}` and the
+    // budget form return 400. It also tokenizes ~30% heavier than Opus-tier,
+    // so its max_tokens budgets get scaled up below.
+    const isFable = profile.model.includes('fable');
+
     // Higher max_tokens for high/xhigh/max effort to leave room for thinking + output.
     // Opus 4.7+ also count tokens slightly higher than 4.6, so leave headroom.
     const uiEffort = profile.thinkingEffort;
     const maxTokensByEffort = { off: 8000, low: 8000, medium: 16000, high: 32000, xhigh: 48000, max: 64000, dynamic: 16000 };
+    const baseMaxTokens = maxTokensByEffort[uiEffort] ?? 16000;
 
     payload = {
       model: profile.model,
@@ -415,24 +421,29 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }],
       system: systemMessage,
       stream: true,
-      max_tokens: maxTokensByEffort[uiEffort] ?? 16000,
+      max_tokens: isFable ? Math.round(baseMaxTokens * 1.3) : baseMaxTokens,
     };
 
-    if (uiEffort === 'off') {
+    if (uiEffort === 'off' && !isFable) {
       payload.thinking = { type: 'disabled' };
     } else {
-      // `display: "summarized"` is required on Opus 4.7/4.8 to keep thinking text
-      // streaming to the UI — the new default is "omitted" (empty thinking_delta).
+      // `display: "summarized"` is required on Fable 5 / Opus 4.7/4.8 to keep
+      // thinking text streaming to the UI — the new default is "omitted"
+      // (empty thinking_delta).
       payload.thinking = { type: 'adaptive', display: 'summarized' };
 
-      if (uiEffort && uiEffort !== 'dynamic') {
+      // A stale 'off' from a previously selected model maps to the lowest
+      // effort on Fable, since thinking can't be disabled there.
+      let effortValue = uiEffort === 'off' ? 'low' : uiEffort;
+
+      if (effortValue && effortValue !== 'dynamic') {
         // Effort gating:
-        //   - `max` is Opus-tier only — downgrade to `high` on Sonnet/Haiku.
-        //   - `xhigh` is Opus 4.7/4.8 only — downgrade to `high` on every other Claude model.
-        const isOpus = profile.model.includes('opus');
-        const supportsXhigh = profile.model.includes('opus-4-7') || profile.model.includes('opus-4-8');
-        let effortValue = uiEffort;
-        if (effortValue === 'max' && !isOpus) effortValue = 'high';
+        //   - `max` is Fable/Opus-tier only — downgrade to `high` on Sonnet/Haiku.
+        //   - `xhigh` is Fable 5 / Opus 4.7/4.8 only — downgrade to `high` on
+        //     every other Claude model.
+        const supportsMax = isFable || profile.model.includes('opus');
+        const supportsXhigh = isFable || profile.model.includes('opus-4-7') || profile.model.includes('opus-4-8');
+        if (effortValue === 'max' && !supportsMax) effortValue = 'high';
         if (effortValue === 'xhigh' && !supportsXhigh) effortValue = 'high';
         payload.output_config = { effort: effortValue };
       }
@@ -655,6 +666,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
     let outputBuffer = '';
     let currentBlockType = null;
 
+    // Anthropic stop reason — Fable 5's safety classifiers can end a stream
+    // with `stop_reason: "refusal"` (HTTP 200, possibly empty content).
+    let anthropicStopReason = null;
+
     // xAI citations map: citation number -> URL
     const xaiCitationsMap = {};
 
@@ -702,6 +717,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
               else if (parsed.type === 'content_block_stop') {
                 console.log('Finished content block:', currentBlockType);
                 currentBlockType = null;
+              }
+              else if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
+                anthropicStopReason = parsed.delta.stop_reason;
+                console.log('Anthropic stop reason:', anthropicStopReason);
               }
             } else if (useGoogleApi) {
               // Handle Google Gemini streaming format with thinking tokens
@@ -892,6 +911,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
         finalContent = transformCitationsToDomains(finalContent, xaiCitationsMap);
       }
       gptDone(port, model, finalContent, profileName);
+    } else if (anthropicStopReason === 'refusal') {
+      throw new Error('The model declined to summarize this page (safety refusal). Try a different model.');
     } else {
       throw new Error('No content received from API');
     }

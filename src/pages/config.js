@@ -334,18 +334,22 @@ document.addEventListener('DOMContentLoaded', async () => {
           { value: 'dynamic', label: 'Dynamic (adaptive)' },
         ];
       }
-      // `xhigh` is supported on Opus 4.7 and Opus 4.8 (not Sonnet/Haiku).
-      // `max` is Opus-tier only.
-      const supportsXhigh = modelId.includes('opus-4-7') || modelId.includes('opus-4-8');
-      const isOpus = modelId.includes('opus');
-      const opts = [
-        { value: 'off',    label: 'Off' },
+      // Fable 5: thinking is always on — an explicit `disabled` returns 400,
+      // so there is no 'off'. Supports the full effort range incl. xhigh/max.
+      const isFable = modelId.includes('fable');
+      // `xhigh` is supported on Fable 5 and Opus 4.7/4.8 (not Sonnet/Haiku).
+      // `max` is Fable/Opus-tier only.
+      const supportsXhigh = isFable || modelId.includes('opus-4-7') || modelId.includes('opus-4-8');
+      const supportsMax = isFable || modelId.includes('opus');
+      const opts = [];
+      if (!isFable) opts.push({ value: 'off', label: 'Off' });
+      opts.push(
         { value: 'low',    label: 'Low' },
         { value: 'medium', label: 'Medium' },
         { value: 'high',   label: 'High' },
-      ];
+      );
       if (supportsXhigh) opts.push({ value: 'xhigh', label: 'Extra High' });
-      if (isOpus)        opts.push({ value: 'max',   label: 'Max' });
+      if (supportsMax)   opts.push({ value: 'max',   label: 'Max' });
       opts.push({ value: 'dynamic', label: 'Dynamic (adaptive)' });
       return opts;
     }

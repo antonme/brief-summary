@@ -39,7 +39,7 @@ Routing is by model-id prefix, and the model field is editable — the lists bel
 | Provider | Endpoint | Preset models | Highlights |
 | --- | --- | --- | --- |
 | **OpenAI** | Responses API | GPT‑5.5, GPT‑5.5 Pro | Streamed reasoning summaries via the Responses API |
-| **Anthropic** | Messages API | Claude Opus 4.8, Claude Sonnet 4.6 | Adaptive thinking + `effort` control |
+| **Anthropic** | Messages API | Claude Fable 5, Claude Opus 4.8, Claude Sonnet 4.6 | Adaptive thinking + `effort` control |
 | **Google** | Gemini API | Gemini 3.1 Pro, Gemini 3.5 Flash | `thinkingLevel` reasoning + Google Search grounding |
 | **Perplexity** | Sonar | Sonar Pro, Sonar | Built-in web search with citations |
 | **xAI** | Responses API | Grok 4.3, Grok 4.1 Fast (reasoning / non‑reasoning) | Live web search + citations |
@@ -74,7 +74,7 @@ You only need keys for the providers whose models you actually select.
 
 Each profile exposes a thinking-effort control whose options adapt to the selected model:
 
-- **Claude** — `off / low / medium / high / xhigh* / max*` mapped to adaptive thinking + `output_config.effort` (`xhigh` is Opus 4.7/4.8, `max` is Opus-tier).
+- **Claude** — `off* / low / medium / high / xhigh* / max*` mapped to adaptive thinking + `output_config.effort` (`xhigh` is Fable 5 / Opus 4.7/4.8, `max` is Fable/Opus-tier, `off` is unavailable on Fable 5 — its thinking can't be disabled).
 - **GPT‑5.x** — `off / low / medium / high / xhigh` via the Responses API `reasoning.effort`.
 - **Gemini 3.x** — `minimal / low / medium / high` via `thinkingLevel`.
 - **Grok / Sonar** — provider defaults.
