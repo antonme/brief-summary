@@ -58,10 +58,24 @@ export async function fetchAndStreamSummary(port, content, profile, url) {
     // Continue without additional context if error occurs
   }
 
+  // Prepend the current real-world date/time to the system message so the model
+  // doesn't fall back to its training cutoff as "now". Computed per-request so the
+  // timestamp is always live; fixed 'en-US' locale keeps the format predictable
+  // regardless of the user's locale, and timeZoneName anchors the clock time.
+  const currentDateTime = new Date().toLocaleString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+
   let messages = [
     {
       role: 'system',
-      content: systemMessage,
+      content: `Primary fact: The current date and time according to the user's browser is ${currentDateTime}.\n\n` + (systemMessage || ''),
     },
     {
       role: 'user',
