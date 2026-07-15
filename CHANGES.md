@@ -1,3 +1,6 @@
+# Unreleased
+- Add support for Grok 4.5
+
 # 2.0.2
 - Adds gpt-4o-mini model
 
