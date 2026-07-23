@@ -269,6 +269,12 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
     // rather than buffering it as a single body.
     headers['Accept'] = 'text/event-stream';
 
+    // The multi-agent beta (ultra mode on GPT-5.6) is gated behind an
+    // opt-in beta header; requests with `multi_agent` 400 without it.
+    if (payload.multi_agent?.enabled) {
+      headers['OpenAI-Beta'] = 'responses_multi_agent=v1';
+    }
+
     console.log('Sending request to OpenAI Responses API:', {
       endpoint: OPENAI_RESPONSES_ENDPOINT,
       headers: { ...headers, Authorization: '***' },
@@ -307,9 +313,11 @@ function gptMessage(port, summary, profileName) {
   port.postMessage({ action: 'GPT_MESSAGE', summary: summary, profile: profileName });
 }
 
-function gptThinking(port, thinking, profileName) {
+function gptThinking(port, thinking, profileName, current) {
   console.log('Sending thinking:', thinking.slice(-50)); // Log last 50 chars
-  port.postMessage({ action: 'GPT_THINKING', thinking: thinking, profile: profileName });
+  // `current` (optional) is the most recent reasoning-summary part only; the
+  // popup shows it live and keeps `thinking` (the full buffer) for review.
+  port.postMessage({ action: 'GPT_THINKING', thinking: thinking, current: current, profile: profileName });
 }
 
 function gptDone(port, model, summary, profileName) {
@@ -561,22 +569,48 @@ export async function fetchAndStream(port, messages, model, profileName) {
       payload.instructions = systemMessage;
     }
 
+    // GPT-5.6 (sol/terra/luna) extends the effort scale with 'max' and adds
+    // two 5.6-only Responses API features surfaced as UI effort choices:
+    //   - 'pro'   → `reasoning.mode: "pro"` (deeper single-agent work,
+    //     orthogonal to effort — effort stays on the API default 'medium')
+    //   - 'ultra' → `multi_agent` beta (parallel subagents synthesized into
+    //     one response; the ChatGPT ultra product runs 4 concurrent agents).
+    //     `reasoning.summary` is rejected alongside `multi_agent`, so ultra
+    //     streams only final text — no thinking panel.
+    const isGpt56 = profile.model.startsWith('gpt-5.6');
     const uiEffort = profile.thinkingEffort;
-    if (uiEffort && uiEffort !== 'off') {
-      // Always send effort and summary together — sending only `summary`
-      // without `effort` can cause the API to hang instead of erroring.
-      // `summary: "auto"` is the most compatible value and lets the API
-      // choose detail level based on effort.
-      const effortValue = (uiEffort === 'dynamic' || !uiEffort)
-        ? 'medium'
-        : (uiEffort === 'max' ? 'xhigh' : uiEffort);
-      payload.reasoning = { effort: effortValue, summary: 'auto' };
+    if (uiEffort === 'off' && isGpt56) {
+      // GPT-5.6 defaults to medium effort when `reasoning` is omitted, so
+      // 'off' must send an explicit 'none'. Older models default to no
+      // reasoning, so omitting (below) remains correct for them.
+      payload.reasoning = { effort: 'none' };
+    } else if (uiEffort && uiEffort !== 'off') {
+      if (isGpt56 && uiEffort === 'ultra') {
+        payload.multi_agent = { enabled: true, max_concurrent_subagents: 4 };
+        payload.reasoning = { effort: 'high' };
+      } else if (isGpt56 && uiEffort === 'pro') {
+        payload.reasoning = { mode: 'pro', effort: 'medium', summary: 'auto' };
+      } else {
+        // Always send effort and summary together — sending only `summary`
+        // without `effort` can cause the API to hang instead of erroring.
+        // `summary: "auto"` is the most compatible value and lets the API
+        // choose detail level based on effort.
+        let effortValue = (uiEffort === 'dynamic') ? 'medium' : uiEffort;
+        // 'max' is GPT-5.6+ only; 'pro'/'ultra' can be stale selections from
+        // a previously chosen 5.6 model. Downgrade all three to the older
+        // models' ceiling.
+        if (!isGpt56 && ['max', 'pro', 'ultra'].includes(effortValue)) {
+          effortValue = 'xhigh';
+        }
+        payload.reasoning = { effort: effortValue, summary: 'auto' };
+      }
     }
     // For 'off': omit `reasoning` entirely. OpenAI's no-reasoning default
     // is what we want, and avoids edge cases with `effort: "none"`.
 
     // Bound reasoning + output combined to prevent runaway thinking on xhigh.
-    const maxByEffort = { off: 4000, low: 8000, medium: 16000, high: 24000, xhigh: 32000, max: 32000, dynamic: 16000 };
+    // max/pro/ultra do strictly more model work, so they get extra headroom.
+    const maxByEffort = { off: 4000, low: 8000, medium: 16000, high: 24000, xhigh: 32000, max: 48000, pro: 48000, ultra: 48000, dynamic: 16000 };
     payload.max_output_tokens = maxByEffort[uiEffort] ?? 16000;
   } else {
     // Legacy OpenAI Chat Completions for non-reasoning models
@@ -672,6 +706,40 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
     // xAI citations map: citation number -> URL
     const xaiCitationsMap = {};
+
+    // OpenAI Responses: per-item metadata from `response.output_item.added`.
+    // Multi-agent (ultra) streams interleave output items from subagents with
+    // the root agent's final answer; only the root `final_answer` message may
+    // go to the summary. Items also carry `phase` on plain GPT-5.6 streams
+    // ("final_answer" on the answer message), while older models (gpt-5.5,
+    // o-series) send neither `agent` nor `phase` — both absent means render.
+    const openAIItemMeta = {};
+    // Reasoning summaries arrive as discrete parts, each opening with a bold
+    // heading. Parts carry no trailing separator, so without one the next
+    // heading glues onto the previous sentence ("…clear!Reviewing baseline…").
+    // Track the current part for the popup's live view; the full buffer keeps
+    // every part (separated) for the collapsed review.
+    let openAICurrentPart = '';
+    const isOpenAIFinalAnswer = (p) => {
+      const meta = openAIItemMeta[p.item_id] || {};
+      const agentName = p.agent?.agent_name ?? meta.agentName;
+      if (agentName && agentName !== '/root') return false;
+      if (meta.phase && meta.phase !== 'final_answer') return false;
+      return true;
+    };
+
+    // Pro mode reasons privately server-side and streams almost nothing until
+    // the answer is ready; ultra never streams reasoning summaries. Seed the
+    // thinking panel so the popup shows activity instead of sitting silent.
+    // Seeds touch only thinkingBuffer, never `summary`, so the final cached
+    // result stays clean.
+    if (useOpenAIResponsesApi && payload.reasoning?.mode === 'pro') {
+      thinkingBuffer = 'Pro mode: reasoning runs server-side with no live stream — the full answer arrives at the end and can take a while…\n\n';
+      gptThinking(port, thinkingBuffer, profileName);
+    } else if (useOpenAIResponsesApi && payload.multi_agent?.enabled) {
+      thinkingBuffer = 'Ultra: coordinating parallel subagents — their work streams here; the synthesized answer follows…\n\n';
+      gptThinking(port, thinkingBuffer, profileName);
+    }
 
     while (connected) {
       const { value, done } = await reader.read();
@@ -820,14 +888,23 @@ export async function fetchAndStream(port, messages, model, profileName) {
                   gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
                 }
               }
-              // Handle reasoning/thinking content
+              // Handle reasoning/thinking content (same part semantics as
+              // OpenAI: separate parts, track the current one for live view)
+              else if (eventType === 'response.reasoning_summary_part.added') {
+                if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
+                  thinkingBuffer += '\n\n';
+                  summary += '\n\n';
+                }
+                openAICurrentPart = '';
+              }
               else if (eventType === 'response.reasoning_summary_text.delta' ||
                        eventType === 'response.reasoning.delta') {
                 const reasoningDelta = parsed.delta || '';
                 if (reasoningDelta) {
+                  openAICurrentPart += reasoningDelta;
                   thinkingBuffer += reasoningDelta;
                   summary += reasoningDelta;
-                  gptThinking(port, thinkingBuffer, profileName);
+                  gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
                 }
               }
               // Fallback: OpenAI-compatible choices format
@@ -852,17 +929,38 @@ export async function fetchAndStream(port, messages, model, profileName) {
               const eventType = parsed.type;
               console.log('OpenAI Responses event:', eventType, parsed);
 
-              if (eventType === 'response.output_text.delta') {
+              if (eventType === 'response.output_item.added') {
+                const item = parsed.item || {};
+                openAIItemMeta[item.id] = {
+                  phase: item.phase,
+                  agentName: parsed.agent?.agent_name ?? item.agent?.agent_name,
+                };
+              }
+              else if (eventType === 'response.reasoning_summary_part.added') {
+                // New summary part: separate it from the previous one and
+                // start a fresh live part for the popup.
+                if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
+                  thinkingBuffer += '\n\n';
+                  summary += '\n\n';
+                }
+                openAICurrentPart = '';
+              }
+              else if (eventType === 'response.output_text.delta') {
                 const textDelta = parsed.delta || '';
-                if (textDelta) {
+                if (textDelta && isOpenAIFinalAnswer(parsed)) {
                   outputBuffer += textDelta;
                   summary += textDelta;
                   gptMessage(port, outputBuffer, profileName);
+                } else if (textDelta) {
+                  // Subagent / interim-phase output (ultra): show as thinking
+                  // so the work is visible, but keep it out of the summary.
+                  thinkingBuffer += textDelta;
+                  gptThinking(port, thinkingBuffer, profileName);
                 }
               }
               else if (eventType === 'response.output_text.done') {
                 const finalText = parsed.text || '';
-                if (finalText && finalText.length > outputBuffer.length) {
+                if (finalText && isOpenAIFinalAnswer(parsed) && finalText.length > outputBuffer.length) {
                   outputBuffer = finalText;
                   summary = thinkingBuffer + finalText;
                   gptMessage(port, outputBuffer, profileName);
@@ -872,9 +970,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
                        eventType === 'response.reasoning.delta') {
                 const reasoningDelta = parsed.delta || '';
                 if (reasoningDelta) {
+                  openAICurrentPart += reasoningDelta;
                   thinkingBuffer += reasoningDelta;
                   summary += reasoningDelta;
-                  gptThinking(port, thinkingBuffer, profileName);
+                  gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
                 }
               }
               else if (eventType === 'response.failed' || eventType === 'response.incomplete') {

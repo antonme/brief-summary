@@ -208,7 +208,9 @@ document.addEventListener("DOMContentLoaded", async function () {
           stream.started = true;
           setStreamingIndicator(msgProfile, "streaming");
         }
-        if (isCurrent) updateThinking(msg.thinking);
+        // Live view shows only the current reasoning part when the provider
+        // sends one; the full buffer is kept for the collapsed review.
+        if (isCurrent) updateThinking(msg.current || msg.thinking);
         break;
 
       case "GPT_MESSAGE":
@@ -219,7 +221,8 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
         if (stream.thinking && !stream.thinkingComplete) {
           stream.thinkingComplete = true;
-          if (isCurrent) collapseThinking();
+          // Pass the full buffer — the live view may hold only the last part.
+          if (isCurrent) collapseThinking(stream.thinking);
         }
         if (isCurrent) {
           lastMessage = msg.summary;
@@ -461,7 +464,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       if (stream.thinking) {
         updateThinking(stream.thinking);
         if (stream.thinkingComplete) {
-          collapseThinking();
+          collapseThinking(stream.thinking);
         }
       } else {
         clearThinking();
@@ -485,7 +488,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
         if (cached.thinking) {
           updateThinking(cached.thinking);
-          collapseThinking();
+          collapseThinking(cached.thinking);
         } else {
           clearThinking();
         }
@@ -688,7 +691,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     });
   }
 
-  function collapseThinking() {
+  function collapseThinking(fullText) {
     requestAnimationFrame(() => {
       const thinkingContent = document.getElementById("thinkingContent");
       const thinkingCollapsed = document.getElementById("thinkingCollapsed");
@@ -699,8 +702,12 @@ document.addEventListener("DOMContentLoaded", async function () {
       // Hide the streaming thinking content
       thinkingContent.classList.add("visually-hidden");
 
-      // Copy the final thinking content to the collapsed view
-      thinkingExpandedDiv.innerHTML = thinkingContent.innerHTML;
+      // Render the complete thinking into the review view. The live view may
+      // hold only the most recent reasoning part, so prefer the full text
+      // when the caller has it.
+      thinkingExpandedDiv.innerHTML = fullText
+        ? format(fullText)
+        : thinkingContent.innerHTML;
 
       // Show the collapsed toggle button
       thinkingCollapsed.classList.remove("visually-hidden");

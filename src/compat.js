@@ -38,7 +38,9 @@ async function updateModelName(from, to) {
         const profileKey = `profile__${profileName}`;
         const profileData = await chrome.storage.sync.get(profileKey);
 
-        if (profileData[profileKey].model === from) {
+        // Optional chaining: a name in `profiles` may lack its profile__ key
+        // (orphaned entry) — skip it rather than crash the whole migration.
+        if (profileData[profileKey]?.model === from) {
           profileData[profileKey].model = to;
           await chrome.storage.sync.set({ [profileKey]: profileData[profileKey] });
         }
@@ -94,6 +96,12 @@ export async function updateModelNaming_20240129() {
 // Update models to change "gpt-4-turbo-preview" to "gpt-4-turbo"
 export async function updateModelNaming_20240423() {
   await updateModelName('gpt-4-turbo-preview', 'gpt-4-turbo');
+}
+
+// Update models to change "grok-4.3" to "grok-4.5" (xAI's July 2026 release
+// superseded 4.3 as the curated preset).
+export async function updateModelNaming_20260712() {
+  await updateModelName('grok-4.3', 'grok-4.5');
 }
 
 // Move profiles from config.profiles (object) to config.profiles (array),

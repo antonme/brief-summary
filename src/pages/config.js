@@ -307,13 +307,30 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Per-provider option lists for the thinking-effort control.
   // Each provider has different supported values:
-  //   - GPT-5+ / o-series: `reasoning_effort` accepts none|low|medium|high|xhigh (no max)
+  //   - GPT-5.6 (sol/terra/luna): `reasoning.effort` accepts none|low|medium|high|xhigh|max;
+  //     'pro' maps to `reasoning.mode: "pro"` and 'ultra' to the multi-agent
+  //     beta (`multi_agent`) — both are 5.6-only Responses API features
+  //   - Older GPT-5.x / o-series: `reasoning.effort` accepts none|low|medium|high|xhigh (no max)
   //   - Claude: `output_config.effort` accepts low|medium|high|max; Opus 4.7 adds xhigh;
   //     max is Opus-tier only; Haiku 4.5 errors on any effort value
   //   - Gemini: numeric `thinkingBudget` — labels show token counts
   // Returns null for models that don't accept any effort/budget parameter.
   function getEffortOptions(modelId) {
     if (!modelId) return null;
+
+    if (modelId.startsWith('gpt-5.6')) {
+      return [
+        { value: 'off',     label: 'Off (no reasoning)' },
+        { value: 'low',     label: 'Low' },
+        { value: 'medium',  label: 'Medium' },
+        { value: 'high',    label: 'High' },
+        { value: 'xhigh',   label: 'Extra High' },
+        { value: 'max',     label: 'Max' },
+        { value: 'pro',     label: 'Pro mode (deepest — no live stream, answer arrives at end)' },
+        { value: 'ultra',   label: 'Ultra (multi-agent, beta — subagent work shown as thinking)' },
+        { value: 'dynamic', label: 'Dynamic (default: medium)' },
+      ];
+    }
 
     if (modelId.startsWith('gpt-5') || /^o\d/.test(modelId)) {
       return [
