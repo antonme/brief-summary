@@ -26,6 +26,17 @@ const ERR_OPENROUTER_API_KEY = 'Error: OpenRouter API key is not set';
 const XAI_ENDPOINT = 'https://api.x.ai/v1/responses';
 const ERR_XAI_API_KEY = 'Error: xAI API key is not set';
 
+// Add new constants for Moonshot (Kimi K3, OpenAI-compatible open platform).
+// Keys are endpoint-specific: a Kimi Code subscription key does NOT work
+// here — an open-platform key is required.
+const MOONSHOT_ENDPOINT = 'https://api.moonshot.ai/v1/chat/completions';
+const ERR_MOONSHOT_API_KEY = 'Error: Moonshot API key is not set';
+
+// Add new constants for Qwen (Alibaba). Qwen3.8-Max is Token-Plan-only —
+// regular DashScope workspaces don't carry it, hence this specific endpoint.
+const QWEN_ENDPOINT = 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions';
+const ERR_QWEN_API_KEY = 'Error: Qwen API key is not set';
+
 // OpenAI Responses API — used for GPT-5+ and o-series reasoning models so that
 // `response.reasoning_summary_text.delta` events stream visible thinking
 // progress. Chat Completions stays as the fallback for legacy GPT models
@@ -179,7 +190,7 @@ function GptResponseReader(response) {
 }
 
 // Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
-async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '', useOpenAIResponsesApi = false) {
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '', useOpenAIResponsesApi = false, useMoonshotApi = false, useQwenApi = false) {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -263,6 +274,23 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
       headers: headers,
       body: JSON.stringify(payload)
     });
+  } else if (useMoonshotApi || useQwenApi) {
+    // Both are OpenAI-compatible Chat Completions with plain Bearer auth;
+    // they differ only in endpoint (and in payload, built by the caller).
+    headers['Authorization'] = `Bearer ${apiKey}`;
+    const endpoint = useMoonshotApi ? MOONSHOT_ENDPOINT : QWEN_ENDPOINT;
+
+    console.log(`Sending request to ${useMoonshotApi ? 'Moonshot' : 'Qwen'} API:`, {
+      endpoint,
+      headers: { ...headers, Authorization: '***' },
+      payload
+    });
+
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
   } else if (useOpenAIResponsesApi) {
     headers['Authorization'] = `Bearer ${apiKey}`;
     // Hint intermediate proxies/CDNs to forward the response as event-stream
@@ -332,13 +360,15 @@ function gptDone(port, model, summary, profileName) {
 //------------------------------------------------------------------------------
 export async function fetchAndStream(port, messages, model, profileName) {
   // Get global API keys
-  const { openAIKey, anthropicApiKey, perplexityApiKey, googleApiKey, openRouterApiKey, xaiApiKey } = await chrome.storage.sync.get([
+  const { openAIKey, anthropicApiKey, perplexityApiKey, googleApiKey, openRouterApiKey, xaiApiKey, moonshotApiKey, qwenApiKey } = await chrome.storage.sync.get([
     'openAIKey',
     'anthropicApiKey',
     'perplexityApiKey',
     'googleApiKey',
     'openRouterApiKey',
-    'xaiApiKey'
+    'xaiApiKey',
+    'moonshotApiKey',
+    'qwenApiKey'
   ]);
   console.log("Model: ", model);
 
@@ -348,12 +378,17 @@ export async function fetchAndStream(port, messages, model, profileName) {
   const useGoogleApi = model.startsWith('gemini-');
   const useOpenRouterApi = model.startsWith('openrouter/');
   const useXaiApi = model.startsWith('grok-');
+  // Native Moonshot (kimi-k3) and Alibaba Qwen (qwen3.8-max-preview). The
+  // OpenRouter-routed kimi/qwen presets start with 'openrouter/' so they
+  // never reach these prefixes.
+  const useMoonshotApi = model.startsWith('kimi-');
+  const useQwenApi = model.startsWith('qwen');
   // GPT-5+ and o-series go through OpenAI's modern Responses API so reasoning
   // streams visibly via `response.reasoning_summary_text.delta` events.
   // Legacy GPT models (gpt-4o-mini, gpt-4-turbo, search variants) stay on the
   // older Chat Completions endpoint as the final fallthrough.
   const useOpenAIResponsesApi = !useAnthropicApi && !usePerplexityApi && !useGoogleApi &&
-                                !useOpenRouterApi && !useXaiApi &&
+                                !useOpenRouterApi && !useXaiApi && !useMoonshotApi && !useQwenApi &&
                                 (model.startsWith('gpt-5') || /^o\d/.test(model));
 
   // Select appropriate API key from global keys
@@ -362,6 +397,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
                         useGoogleApi ? googleApiKey :
                         useOpenRouterApi ? openRouterApiKey :
                         useXaiApi ? xaiApiKey :
+                        useMoonshotApi ? moonshotApiKey :
+                        useQwenApi ? qwenApiKey :
                         openAIKey;
 
   // Add validation for API key
@@ -371,6 +408,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
                     useGoogleApi ? ERR_GOOGLE_API_KEY :
                     useOpenRouterApi ? ERR_OPENROUTER_API_KEY :
                     useXaiApi ? ERR_XAI_API_KEY :
+                    useMoonshotApi ? ERR_MOONSHOT_API_KEY :
+                    useQwenApi ? ERR_QWEN_API_KEY :
                     ERR_OPENAI_KEY;
     console.error('API Key Error:', errorMsg);
     gptError(port, errorMsg, profileName);
@@ -527,6 +566,38 @@ export async function fetchAndStream(port, messages, model, profileName) {
       messages: messages,
       stream: true
     };
+  } else if (useMoonshotApi) {
+    // Kimi K3 on the Moonshot open platform (OpenAI-compatible). K3 thinking
+    // is always-on server-side and the top-level `reasoning_effort` field
+    // currently accepts only "max" — there is no off switch and no graded
+    // scale to map the UI effort onto, so send it unconditionally (the UI
+    // shows no effort selector for kimi-* models).
+    payload = {
+      model: profile.model,
+      messages: messages,
+      stream: true,
+      reasoning_effort: 'max',
+      // Bound always-on reasoning + output; generous so summaries never clip.
+      max_tokens: 32768,
+    };
+  } else if (useQwenApi) {
+    // Qwen3.8-Max (Alibaba Token Plan compatible-mode). Reasoning is budgeted
+    // via `enable_thinking` + `thinking_budget` (tokens). Fractions of the
+    // output cap follow multipoly's QWEN_BUDGET adapter; even 'off' keeps a
+    // small budget — the model reasons regardless, a tiny budget just
+    // bounds it. Thinking streams separately as `delta.reasoning_content`.
+    const qwenTokenCap = 16384;
+    const budgetFraction = { off: 0.1, low: 0.25, medium: 0.4, high: 0.6, xhigh: 0.8, max: 0.8, dynamic: 0.4 };
+    const frac = budgetFraction[profile.thinkingEffort] ?? 0.4;
+
+    payload = {
+      model: profile.model,
+      messages: messages,
+      stream: true,
+      max_tokens: qwenTokenCap,
+      enable_thinking: true,
+      thinking_budget: Math.max(256, Math.round(frac * qwenTokenCap)),
+    };
   } else if (useXaiApi) {
     // Format payload for xAI Responses API (grok-*).
     // Per xAI docs the system prompt is a {role:'system'} entry INSIDE the
@@ -642,6 +713,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
   console.log('Using Google API:', useGoogleApi);
   console.log('Using OpenRouter API:', useOpenRouterApi);
   console.log('Using xAI API:', useXaiApi);
+  console.log('Using Moonshot API:', useMoonshotApi);
+  console.log('Using Qwen API:', useQwenApi);
 
   // Use profile-specific API keys (if implemented) or fall back to global keys
   let apiKey;
@@ -655,6 +728,10 @@ export async function fetchAndStream(port, messages, model, profileName) {
     apiKey = profile.openRouterApiKey || selectedApiKey;
   } else if (useXaiApi) {
     apiKey = profile.xaiApiKey || selectedApiKey;
+  } else if (useMoonshotApi) {
+    apiKey = profile.moonshotApiKey || selectedApiKey;
+  } else if (useQwenApi) {
+    apiKey = profile.qwenApiKey || selectedApiKey;
   } else {
     apiKey = profile.apiKey || selectedApiKey; // OpenAI key
   }
@@ -670,7 +747,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
   try {
     await debug('PAYLOAD', payload);
 
-    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model, useOpenAIResponsesApi);
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model, useOpenAIResponsesApi, useMoonshotApi, useQwenApi);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -853,6 +930,26 @@ export async function fetchAndStream(port, messages, model, profileName) {
               if (content) {
                 summary += content;
                 gptMessage(port, summary, profileName);
+              }
+            } else if (useMoonshotApi || useQwenApi) {
+              // Kimi K3 / Qwen3.8 stream OpenAI-compatible SSE with reasoning
+              // on a separate `reasoning_content` delta channel (DeepSeek
+              // style). Reasoning goes to the thinking panel; the popup
+              // collapses it when the first answer token arrives.
+              const delta = parsed.choices?.[0]?.delta || {};
+
+              const reasoningText = delta.reasoning_content || '';
+              if (reasoningText) {
+                thinkingBuffer += reasoningText;
+                summary += reasoningText;  // For backward compatibility
+                gptThinking(port, thinkingBuffer, profileName);
+              }
+
+              const content = delta.content || '';
+              if (content) {
+                outputBuffer += content;
+                summary += content;  // For backward compatibility
+                gptMessage(port, outputBuffer, profileName);
               }
             } else if (useXaiApi) {
               // Handle xAI Responses API streaming format

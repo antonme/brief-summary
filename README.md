@@ -43,6 +43,8 @@ Routing is by model-id prefix, and the model field is editable — the lists bel
 | **Google** | Gemini API | Gemini 3.1 Pro, Gemini 3.5 Flash | `thinkingLevel` reasoning + Google Search grounding |
 | **Perplexity** | Sonar | Sonar Pro, Sonar | Built-in web search with citations |
 | **xAI** | Responses API | Grok 4.5, Grok 4.1 Fast (reasoning / non‑reasoning) | Live web search + citations |
+| **Moonshot** | Chat Completions | Kimi K3 | Always‑on thinking streamed to the panel |
+| **Qwen (Alibaba)** | Chat Completions (compatible‑mode) | Qwen3.8‑Max Preview | Budgeted thinking via `thinking_budget` |
 | **OpenRouter** | Chat Completions | DeepSeek V4 Pro, Kimi K2.6, GLM‑5 Turbo, Qwen3.7‑Max | Access frontier open models through one key |
 
 ## Installation
@@ -64,7 +66,8 @@ Or load it temporarily: open `about:debugging` → **This Firefox** → **Load T
 Open the extension's **Options** page (right-click the toolbar icon → *Options*, or the gear in the popup) and:
 
 1. **Add API keys** for the providers you want to use. Keys are stored in `chrome.storage.sync` and quick links to each provider's key page are built in:
-   - [OpenAI](https://platform.openai.com/api-keys) · [Anthropic](https://console.anthropic.com/settings/keys) · [Perplexity](https://www.perplexity.ai/settings/api) · [Google AI Studio](https://aistudio.google.com/app/apikey) · [OpenRouter](https://openrouter.ai/keys) · [xAI](https://console.x.ai/)
+   - [OpenAI](https://platform.openai.com/api-keys) · [Anthropic](https://console.anthropic.com/settings/keys) · [Perplexity](https://www.perplexity.ai/settings/api) · [Google AI Studio](https://aistudio.google.com/app/apikey) · [OpenRouter](https://openrouter.ai/keys) · [xAI](https://console.x.ai/) · [Moonshot](https://platform.moonshot.ai/console/api-keys) · [Alibaba Model Studio](https://modelstudio.console.alibabacloud.com/)
+   - Note: Kimi K3 needs a Moonshot *open-platform* key (Kimi Code subscription keys won't work), and Qwen3.8‑Max Preview needs an Alibaba Token‑Plan/Code‑Plan key — it is only served from the Token Plan endpoint.
 2. **Create profiles** — each holds a model, system message, custom prompt, and thinking-effort level. Mark one as the default.
 3. **Tune the custom prompt** (up to 8 KB) to shape the summary's format and tone.
 
@@ -78,6 +81,8 @@ Each profile exposes a thinking-effort control whose options adapt to the select
 - **GPT‑5.6** — `off / low / medium / high / xhigh / max` via `reasoning.effort`, plus **Pro mode** (`reasoning.mode: "pro"` — deeper single‑agent reasoning) and **Ultra** (the `multi_agent` Responses API beta: parallel subagents synthesized into one answer; reasoning summaries are unavailable in this mode, so no thinking panel).
 - **Older GPT‑5.x** — `off / low / medium / high / xhigh` via the Responses API `reasoning.effort`.
 - **Gemini 3.x** — `minimal / low / medium / high` via `thinkingLevel`.
+- **Qwen 3.8** — `off / low / medium / high / xhigh` mapped to a `thinking_budget` token budget (10–80% of the output cap).
+- **Kimi K3** — no control: thinking is always on and `reasoning_effort` accepts only `max`.
 - **Grok / Sonar** — provider defaults.
 
 ## Usage

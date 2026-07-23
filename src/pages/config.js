@@ -71,6 +71,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       googleApiKey: '',
       openRouterApiKey: '',
       xaiApiKey: '',
+      moonshotApiKey: '',
+      qwenApiKey: '',
       debug: false,
       defaultProfile: 'default',
       profiles: ['default'],
@@ -95,6 +97,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       googleApiKey: document.getElementById('googleApiKey').value.trim(),
       openRouterApiKey: document.getElementById('openRouterApiKey').value.trim(),
       xaiApiKey: document.getElementById('xaiApiKey').value.trim(),
+      moonshotApiKey: document.getElementById('moonshotApiKey').value.trim(),
+      qwenApiKey: document.getElementById('qwenApiKey').value.trim(),
       debug: debug
     };
     
@@ -203,6 +207,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       'googleApiKey',
       'openRouterApiKey',
       'xaiApiKey',
+      'moonshotApiKey',
+      'qwenApiKey',
       'defaultProfile',
       'debug',
       'profiles',
@@ -230,6 +236,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('googleApiKey').value = config.googleApiKey ?? '';
     document.getElementById('openRouterApiKey').value = config.openRouterApiKey ?? '';
     document.getElementById('xaiApiKey').value = config.xaiApiKey ?? '';
+    document.getElementById('moonshotApiKey').value = config.moonshotApiKey ?? '';
+    document.getElementById('qwenApiKey').value = config.qwenApiKey ?? '';
 
     // Load profiles into the dropdown and select the current profile.
     // Sort the profiles such that the default profile is always first.
@@ -314,9 +322,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   //   - Claude: `output_config.effort` accepts low|medium|high|max; Opus 4.7 adds xhigh;
   //     max is Opus-tier only; Haiku 4.5 errors on any effort value
   //   - Gemini: numeric `thinkingBudget` — labels show token counts
+  //   - Kimi K3: thinking always-on, `reasoning_effort` accepts only "max" —
+  //     nothing to choose, so no control is shown
+  //   - Qwen 3.8: `thinking_budget` token budget — labels show the approximate
+  //     budget (fractions of the 16k output cap, matching gpt.js)
   // Returns null for models that don't accept any effort/budget parameter.
   function getEffortOptions(modelId) {
     if (!modelId) return null;
+
+    // Kimi K3: always-on thinking with a single accepted effort value —
+    // showing a selector would be a lie, so hide the control entirely.
+    if (modelId.startsWith('kimi-')) return null;
+
+    if (modelId.startsWith('qwen')) {
+      return [
+        { value: 'off',     label: 'Minimal (~1.6k token budget)' },
+        { value: 'low',     label: 'Low (~4k)' },
+        { value: 'medium',  label: 'Medium (~6.5k)' },
+        { value: 'high',    label: 'High (~10k)' },
+        { value: 'xhigh',   label: 'Extra High (~13k)' },
+        { value: 'dynamic', label: 'Dynamic (default: medium)' },
+      ];
+    }
 
     if (modelId.startsWith('gpt-5.6')) {
       return [
@@ -478,6 +505,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Powers the button that opens the xAI API page
   document.getElementById('open-xai-keys').addEventListener('click', function () {
     chrome.tabs.create({ url: 'https://console.x.ai/' });
+  });
+
+  // Powers the button that opens the Moonshot open-platform API keys page
+  document.getElementById('open-moonshot-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://platform.moonshot.ai/console/api-keys' });
+  });
+
+  // Powers the button that opens the Alibaba Model Studio console (Qwen keys)
+  document.getElementById('open-qwen-keys').addEventListener('click', function () {
+    chrome.tabs.create({ url: 'https://modelstudio.console.alibabacloud.com/' });
   });
 
   // Powers the button that exports the current profile config

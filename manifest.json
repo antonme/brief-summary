@@ -10,7 +10,9 @@
     "https://api.perplexity.ai/*",
     "https://generativelanguage.googleapis.com/*",
     "https://openrouter.ai/*",
-    "https://api.x.ai/*"
+    "https://api.x.ai/*",
+    "https://api.moonshot.ai/*",
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/*"
   ],
   "icons": {
     "16": "assets/new_icon_h_16.png",

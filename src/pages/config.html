@@ -166,6 +166,46 @@
                         </button>
                     </div>
 
+                    <div class="input-group mt-3">
+                        <label class="input-group-text" for="moonshotApiKey"
+                            >Moonshot API Key</label
+                        >
+                        <input
+                            type="text"
+                            id="moonshotApiKey"
+                            name="moonshotApiKey"
+                            class="form-control"
+                            placeholder="Open-platform key (Kimi Code keys won't work)"
+                        />
+                        <button
+                            id="open-moonshot-keys"
+                            class="btn btn-primary btn-sm"
+                            title="Moonshot API keys"
+                        >
+                            &#x2197;
+                        </button>
+                    </div>
+
+                    <div class="input-group mt-3">
+                        <label class="input-group-text" for="qwenApiKey"
+                            >Qwen API Key</label
+                        >
+                        <input
+                            type="text"
+                            id="qwenApiKey"
+                            name="qwenApiKey"
+                            class="form-control"
+                            placeholder="Alibaba Token-Plan / Code-Plan key"
+                        />
+                        <button
+                            id="open-qwen-keys"
+                            class="btn btn-primary btn-sm"
+                            title="Alibaba Model Studio API keys"
+                        >
+                            &#x2197;
+                        </button>
+                    </div>
+
                     <div class="form-check mb-3">
                         <input
                             type="checkbox"
@@ -303,6 +343,20 @@
                                 </option>
                                 <option value="grok-4-1-fast-non-reasoning">
                                     Grok 4.1 Fast Non-Reasoning (Web Search)
+                                </option>
+                            </optgroup>
+
+                            <!-- Moonshot Kimi Models -->
+                            <optgroup label="Moonshot Kimi Models">
+                                <option value="kimi-k3">
+                                    Kimi K3 (Thinking always-on)
+                                </option>
+                            </optgroup>
+
+                            <!-- Alibaba Qwen Models -->
+                            <optgroup label="Alibaba Qwen Models">
+                                <option value="qwen3.8-max-preview">
+                                    Qwen3.8 Max Preview (2.4T flagship)
                                 </option>
                             </optgroup>
                         </select>
