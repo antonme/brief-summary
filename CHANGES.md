@@ -1,5 +1,9 @@
-# Unreleased
-- Add support for Grok 4.5
+# 3.1.0
+- Refresh model presets for GPT-6.1 Sol, GPT-6 Astra/Sol/Luna, Claude Fable 5.1 and Opus/Sonnet/Haiku 5.5, Gemini 4 Argon and 3.8 Flash, Grok 4.7, and current open models through OpenRouter.
+- Migrate Perplexity requests to the Agent API while preserving saved Sonar profiles through preset mappings.
+- Share model effort controls between settings and requests; update Kimi and Qwen thinking settings.
+- Fix fragmented UTF-8 streaming and provider error handling; reject incomplete summaries instead of caching them.
+- Add integration tests and an authenticated live API checker.
 
 # 2.0.2
 - Adds gpt-4o-mini model

@@ -1,3 +1,5 @@
+import { MODEL_GROUPS, getEffortOptions } from '../models.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
   const maxPromptBytes = 8192;
   const customPromptsCounter = document.getElementById('customPromptsCounter');
@@ -57,7 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function buildDefaultProfile() {
     return {
-      model: 'claude-opus-4-8',
+      model: 'claude-opus-5-5',
       customPrompts: '',
       systemMessage: ''
     };
@@ -277,12 +279,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentProfile = profile;
       document.getElementById('profileSelector').value = profile;
       document.getElementById('name').value = profile;
-      document.getElementById('model').value = data.model || 'claude-opus-4-8';
-      // Try to match the selector; if no match, it stays on whatever was selected
+      document.getElementById('model').value = data.model || 'claude-opus-5-5';
+      // Custom/saved models remain editable even when absent from the preset catalog.
       const selector = document.getElementById('modelSelector');
       const hasOption = Array.from(selector.options).some(o => o.value === data.model);
-      if (hasOption) selector.value = data.model;
-      document.getElementById('thinkingEffort').value = data.thinkingEffort || 'dynamic';
+      selector.value = hasOption ? data.model : '';
+      updateEffortControl();
+      const effortSelect = document.getElementById('thinkingEffort');
+      const savedEffort = data.thinkingEffort || 'dynamic';
+      effortSelect.value = Array.from(effortSelect.options).some(o => o.value === savedEffort) ? savedEffort : 'dynamic';
       document.getElementById('customPrompts').value = data.customPrompts || '';
       document.getElementById('systemMessage').value = data.systemMessage || '';
       document.getElementById('default').checked = profile === config.defaultProfile;
@@ -311,118 +316,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function showSuccess(msg) {
     showStatus(msg, 'success');
-  }
-
-  // Per-provider option lists for the thinking-effort control.
-  // Each provider has different supported values:
-  //   - GPT-5.6 (sol/terra/luna): `reasoning.effort` accepts none|low|medium|high|xhigh|max;
-  //     'pro' maps to `reasoning.mode: "pro"` and 'ultra' to the multi-agent
-  //     beta (`multi_agent`) — both are 5.6-only Responses API features
-  //   - Older GPT-5.x / o-series: `reasoning.effort` accepts none|low|medium|high|xhigh (no max)
-  //   - Claude: `output_config.effort` accepts low|medium|high|max; Opus 4.7 adds xhigh;
-  //     max is Opus-tier only; Haiku 4.5 errors on any effort value
-  //   - Gemini: numeric `thinkingBudget` — labels show token counts
-  //   - Kimi K3: thinking always-on, `reasoning_effort` accepts only "max" —
-  //     nothing to choose, so no control is shown
-  //   - Qwen 3.8: `thinking_budget` token budget — labels show the approximate
-  //     budget (fractions of the 16k output cap, matching gpt.js)
-  // Returns null for models that don't accept any effort/budget parameter.
-  function getEffortOptions(modelId) {
-    if (!modelId) return null;
-
-    // Kimi K3: always-on thinking with a single accepted effort value —
-    // showing a selector would be a lie, so hide the control entirely.
-    if (modelId.startsWith('kimi-')) return null;
-
-    if (modelId.startsWith('qwen')) {
-      return [
-        { value: 'off',     label: 'Minimal (~1.6k token budget)' },
-        { value: 'low',     label: 'Low (~4k)' },
-        { value: 'medium',  label: 'Medium (~6.5k)' },
-        { value: 'high',    label: 'High (~10k)' },
-        { value: 'xhigh',   label: 'Extra High (~13k)' },
-        { value: 'dynamic', label: 'Dynamic (default: medium)' },
-      ];
-    }
-
-    if (modelId.startsWith('gpt-5.6')) {
-      return [
-        { value: 'off',     label: 'Off (no reasoning)' },
-        { value: 'low',     label: 'Low' },
-        { value: 'medium',  label: 'Medium' },
-        { value: 'high',    label: 'High' },
-        { value: 'xhigh',   label: 'Extra High' },
-        { value: 'max',     label: 'Max' },
-        { value: 'pro',     label: 'Pro mode (deepest — no live stream, answer arrives at end)' },
-        { value: 'ultra',   label: 'Ultra (multi-agent, beta — subagent work shown as thinking)' },
-        { value: 'dynamic', label: 'Dynamic (default: medium)' },
-      ];
-    }
-
-    if (modelId.startsWith('gpt-5') || /^o\d/.test(modelId)) {
-      return [
-        { value: 'off',     label: 'Off (no reasoning)' },
-        { value: 'low',     label: 'Low' },
-        { value: 'medium',  label: 'Medium' },
-        { value: 'high',    label: 'High' },
-        { value: 'xhigh',   label: 'Extra High' },
-        { value: 'dynamic', label: 'Dynamic (default: medium)' },
-      ];
-    }
-
-    if (modelId.startsWith('claude-')) {
-      if (modelId.includes('haiku')) {
-        // Haiku 4.5 errors on any effort value — only the off/adaptive endpoints work.
-        return [
-          { value: 'off',     label: 'Off' },
-          { value: 'dynamic', label: 'Dynamic (adaptive)' },
-        ];
-      }
-      // Fable 5: thinking is always on — an explicit `disabled` returns 400,
-      // so there is no 'off'. Supports the full effort range incl. xhigh/max.
-      const isFable = modelId.includes('fable');
-      // `xhigh` is supported on Fable 5 and Opus 4.7/4.8 (not Sonnet/Haiku).
-      // `max` is Fable/Opus-tier only.
-      const supportsXhigh = isFable || modelId.includes('opus-4-7') || modelId.includes('opus-4-8');
-      const supportsMax = isFable || modelId.includes('opus');
-      const opts = [];
-      if (!isFable) opts.push({ value: 'off', label: 'Off' });
-      opts.push(
-        { value: 'low',    label: 'Low' },
-        { value: 'medium', label: 'Medium' },
-        { value: 'high',   label: 'High' },
-      );
-      if (supportsXhigh) opts.push({ value: 'xhigh', label: 'Extra High' });
-      if (supportsMax)   opts.push({ value: 'max',   label: 'Max' });
-      opts.push({ value: 'dynamic', label: 'Dynamic (adaptive)' });
-      return opts;
-    }
-
-    if (modelId.startsWith('gemini-')) {
-      // Gemini 3.x uses `thinkingLevel` (minimal|low|medium|high) — no token
-      // budget. Older Gemini 2.5 still uses the numeric `thinkingBudget`.
-      if (modelId.startsWith('gemini-3')) {
-        return [
-          { value: 'off',     label: 'Minimal' },
-          { value: 'low',     label: 'Low' },
-          { value: 'medium',  label: 'Medium' },
-          { value: 'high',    label: 'High' },
-          { value: 'dynamic', label: 'Dynamic (model default)' },
-        ];
-      }
-      // Legacy Gemini 2.5: `thinkingBudget` is a token count — show it in the label.
-      return [
-        { value: 'off',     label: 'Off' },
-        { value: 'low',     label: 'Low (2k tokens)' },
-        { value: 'medium',  label: 'Medium (10k tokens)' },
-        { value: 'high',    label: 'High (32k tokens)' },
-        { value: 'xhigh',   label: 'Extra High (60k tokens)' },
-        { value: 'max',     label: 'Max (100k tokens)' },
-        { value: 'dynamic', label: 'Dynamic (model decides)' },
-      ];
-    }
-
-    return null;
   }
 
   function updateEffortControl() {
@@ -643,6 +536,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     showSuccess(`Removed ${removed} cached ${removed === 1 ? 'entry' : 'entries'} older than 1 week.`);
     await updateCacheStats();
   });
+
+  // Populate the catalog before loading a saved profile into the selector.
+  const modelSelector = document.getElementById('modelSelector');
+  modelSelector.replaceChildren();
+  for (const [label, models] of MODEL_GROUPS) {
+    const group = document.createElement('optgroup');
+    group.label = label;
+    for (const [id, name] of models) group.appendChild(new Option(name, id));
+    modelSelector.appendChild(group);
+  }
 
   // Load config on page load
   await reloadConfig();

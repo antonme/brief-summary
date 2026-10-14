@@ -1,9 +1,7 @@
 import { debug } from './util.js';
+import { normalizeEffort, isOpenAIReasoningModel } from './models.js';
 
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
-const DATA_MARKER = 'data: ';
-const DONE_MARKER = `${DATA_MARKER}[DONE]`;
-//const PORT_CLOSED = 'Error: Attempting to use a disconnected port object';
 const ERR_OPENAI_KEY = 'Error: OpenAI API key is not set';
 
 // Add new constants for Anthropic
@@ -11,7 +9,7 @@ const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const ERR_ANTHROPIC_API_KEY = 'Error: Anthropic API key is not set';
 
 // Add new constants for Perplexity
-const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
+const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/v1/agent';
 const ERR_PERPLEXITY_API_KEY = 'Error: Perplexity API key is not set';
 
 // Add new constants for Google Gemini
@@ -32,8 +30,7 @@ const ERR_XAI_API_KEY = 'Error: xAI API key is not set';
 const MOONSHOT_ENDPOINT = 'https://api.moonshot.ai/v1/chat/completions';
 const ERR_MOONSHOT_API_KEY = 'Error: Moonshot API key is not set';
 
-// Add new constants for Qwen (Alibaba). Qwen3.8-Max is Token-Plan-only —
-// regular DashScope workspaces don't carry it, hence this specific endpoint.
+// Qwen uses the international Token Plan endpoint and its dedicated key.
 const QWEN_ENDPOINT = 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions';
 const ERR_QWEN_API_KEY = 'Error: Qwen API key is not set';
 
@@ -81,112 +78,43 @@ function transformCitationsToDomains(text, citationsMap = {}) {
   return result;
 }
 
-/*------------------------------------------------------------------------------
- * Builds up a buffer of JSON data and returns the parsed JSON object once
- * enough data has been received to represent a complete JSON string. If the
- * buffer is incomplete, returns null until enough data has been received to
- * return a complete JSON object.
- *----------------------------------------------------------------------------*/
-function JsonBuffer() {
-  let buffer = '';
-
-  return function (data) {
-    buffer += data;
-
-    let result = null;
-
-    try {
-      result = JSON.parse(buffer);
-      buffer = '';
-    } catch (error) {
-      // do nothing
-    }
-
-    return result;
-  };
-}
-
-/*------------------------------------------------------------------------------
- * Parses the response from the openai chat completions endpoint and acts as an
- * iterator over the response. Because the response is streamed, the generator
- * builds up the aggregated response, returning the complete buffer on each
- * invocation until complete.
- *
- * For example:
- *   {data: "Hello", error: null}
- *   {data: "Hello, how are", error: null}
- *   {data: "Hello, how are you?", error: null}
- *
- * If an error occurs, the error is returned in the error field and the
- * generation is stopped. After that, it will always return the same structure.
- *----------------------------------------------------------------------------*/
-function GptResponseReader(response) {
+// Decode SSE frames across arbitrary network/UTF-8 boundaries. The providers
+// all use SSE; framing belongs here rather than in their individual adapters.
+async function* readServerEvents(response) {
   const reader = response.body.getReader();
-
-  let buffer = '';
-  let error = null;
-  let done = false;
-
-  return async function () {
-    if (done) {
-      return null;
-    }
-
-    const { value: chunk, done: readerDone } = await reader.read();
-
-    if (readerDone) {
-      await debug('FINISH');
-      done = true;
-      return { data: buffer, error: error };
-    }
-
-    const string = new TextDecoder().decode(chunk);
-    await debug('RECV:', string);
-
-    // Some errors are returned as the initial message, but they can be
-    // multi-line, so we have to attempt to parse them here to see if they are
-    // an error. If the chunk cannot be parsed as JSON, then it is a normal
-    // message chunk.
-    try {
-      const data = JSON.parse(string);
-
-      if (data.error) {
-        error = data.error.message;
-        return { data: buffer, error: error };
-      }
-    } catch (error) {
-      // do nothing
-    }
-
-    const lines = string.split('\n').filter((line) => line !== '');
-    const json_buffer = JsonBuffer();
-
-    await debug('LINES:', lines);
-
-    for (const line of lines) {
-      if (line === DONE_MARKER) {
-        done = true;
-        return { data: buffer, error: error };
-      }
-
-      if (line.startsWith('data: ')) {
-        const data = json_buffer(line.substring(6));
-
-        if (data !== null) {
-          if (data.error) {
-            error = data.error.message;
-            return { data: buffer, error: error };
-          }
-
-          if (data.choices[0].delta.content) {
-            buffer += data.choices[0].delta.content;
-          }
-        }
-      }
-    }
-
-    return { data: buffer, error: error };
+  const decoder = new TextDecoder();
+  let pending = '';
+  let finished = false;
+  const parseFrame = frame => {
+    const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).replace(/^ /, '')).join('\n');
+    if (!data) return null;
+    if (data === '[DONE]') return { type: 'stream.done' };
+    return JSON.parse(data);
   };
+  try {
+    while (!finished) {
+      const { value, done } = await reader.read();
+      finished = done;
+      pending += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      let boundary;
+      while ((boundary = /\r?\n\r?\n/.exec(pending))) {
+        const frame = pending.slice(0, boundary.index);
+        pending = pending.slice(boundary.index + boundary[0].length);
+        const event = parseFrame(frame);
+        if (event) yield event;
+      }
+    }
+    if (pending.trim()) {
+      const event = parseFrame(pending);
+      if (event) yield event;
+    }
+  } finally {
+    if (!finished) {
+      try { await reader.cancel(); } catch { /* Completion/consumer cancellation already decided the result. */ }
+    }
+    reader.releaseLock();
+  }
 }
 
 // Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
@@ -374,11 +302,11 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
   // Determine which API to use based on model name prefixes
   const useAnthropicApi = model.startsWith('claude-');
-  const usePerplexityApi = model.startsWith('sonar') || model.startsWith('llama-');
+  const usePerplexityApi = model.startsWith('perplexity/') || model.startsWith('sonar') || model.startsWith('llama-');
   const useGoogleApi = model.startsWith('gemini-');
   const useOpenRouterApi = model.startsWith('openrouter/');
   const useXaiApi = model.startsWith('grok-');
-  // Native Moonshot (kimi-k3) and Alibaba Qwen (qwen3.8-max-preview). The
+  // Native Moonshot (kimi-k3) and Alibaba Qwen. The
   // OpenRouter-routed kimi/qwen presets start with 'openrouter/' so they
   // never reach these prefixes.
   const useMoonshotApi = model.startsWith('kimi-');
@@ -389,7 +317,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
   // older Chat Completions endpoint as the final fallthrough.
   const useOpenAIResponsesApi = !useAnthropicApi && !usePerplexityApi && !useGoogleApi &&
                                 !useOpenRouterApi && !useXaiApi && !useMoonshotApi && !useQwenApi &&
-                                (model.startsWith('gpt-5') || /^o\d/.test(model));
+                                isOpenAIReasoningModel(model);
 
   // Select appropriate API key from global keys
   const selectedApiKey = useAnthropicApi ? anthropicApiKey :
@@ -428,7 +356,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
   });
 
   const profileData = await chrome.storage.sync.get(profileKey);
-  const profile = profileData[profileKey];
+  const profile = { ...profileData[profileKey], model, thinkingEffort: normalizeEffort(model, profileData[profileKey]?.thinkingEffort) };
 
   console.log('Retrieved profile:', {
     exists: !!profile,
@@ -443,16 +371,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
   let payload;
   if (useAnthropicApi) {
-    // Format payload for Anthropic API (Fable 5, Opus 4.6/4.7/4.8, Sonnet 4.6).
-    // Opus 4.7/4.8 reject `thinking: {type: "enabled", budget_tokens: N}` with 400 —
-    // adaptive thinking is the only supported mode. Effort goes inside `output_config`.
+    // Current Claude models use adaptive thinking and output_config.effort.
     const systemMessage = messages.find(m => m.role === 'system')?.content || '';
     const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n\n');
 
-    // Fable 5: thinking is always on — both `{type: "disabled"}` and the
-    // budget form return 400. It also tokenizes ~30% heavier than Opus-tier,
-    // so its max_tokens budgets get scaled up below.
-    const isFable = profile.model.includes('fable');
+    // Fable, Mythos and Opus 5.5 always think; a saved off value becomes low.
+    const alwaysThinks = /claude-(fable|mythos|opus-5-5)/.test(profile.model);
 
     // Higher max_tokens for high/xhigh/max effort to leave room for thinking + output.
     // Opus 4.7+ also count tokens slightly higher than 4.6, so leave headroom.
@@ -468,11 +392,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
       }],
       system: systemMessage,
       stream: true,
-      max_tokens: isFable ? Math.round(baseMaxTokens * 1.3) : baseMaxTokens,
+      max_tokens: alwaysThinks ? Math.round(baseMaxTokens * 1.3) : baseMaxTokens,
     };
 
-    if (uiEffort === 'off' && !isFable) {
-      payload.thinking = { type: 'disabled' };
+    if (uiEffort === 'off' && !alwaysThinks) {
+      payload.thinking = { type: profile.model.includes('sonnet-5-5') ? 'between_tools' : 'disabled' };
+      if (/claude-(sonnet|haiku)-5-5/.test(profile.model)) payload.output_config = { effort: 'low' };
     } else {
       // `display: "summarized"` is required on Fable 5 / Opus 4.7/4.8 to keep
       // thinking text streaming to the UI — the new default is "omitted"
@@ -483,29 +408,21 @@ export async function fetchAndStream(port, messages, model, profileName) {
       // effort on Fable, since thinking can't be disabled there.
       let effortValue = uiEffort === 'off' ? 'low' : uiEffort;
 
-      if (effortValue && effortValue !== 'dynamic') {
-        // Effort gating:
-        //   - `max` is Fable/Opus-tier only — downgrade to `high` on Sonnet/Haiku.
-        //   - `xhigh` is Fable 5 / Opus 4.7/4.8 only — downgrade to `high` on
-        //     every other Claude model.
-        const supportsMax = isFable || profile.model.includes('opus');
-        const supportsXhigh = isFable || profile.model.includes('opus-4-7') || profile.model.includes('opus-4-8');
-        if (effortValue === 'max' && !supportsMax) effortValue = 'high';
-        if (effortValue === 'xhigh' && !supportsXhigh) effortValue = 'high';
+      if (effortValue && effortValue !== 'dynamic' && !profile.model.includes('haiku-4-5')) {
         payload.output_config = { effort: effortValue };
       }
-      // 'dynamic' → omit effort; API defaults to 'high' with adaptive thinking.
+      // Dynamic uses the model default (medium on Opus/Haiku 5.5, high otherwise).
     }
   } else if (usePerplexityApi) {
-    // Format payload for Perplexity API with web search (built-in).
-    // NOTE: `search_mode` only accepts web|academic|sec (default web) — the old
-    // value 'medium' was invalid. The balanced-depth control is a separate
-    // parameter: web_search_options.search_context_size (low|medium|high).
+    // Agent API replaces Sonar Chat Completions. Preserve saved Sonar profiles
+    // using Perplexity's documented preset mappings without rewriting storage.
+    const sonarPresets = { 'sonar': 'fast', 'sonar-pro': 'fast', 'sonar-reasoning': 'low', 'sonar-reasoning-pro': 'low', 'sonar-deep-research': 'high' };
+    const preset = model.startsWith('perplexity/') ? model.slice('perplexity/'.length) : (sonarPresets[model] || 'fast');
     payload = {
-      model: profile.model,
-      messages: messages,
+      preset,
+      instructions: messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n'),
+      input: messages.filter(m => m.role !== 'system'),
       stream: true,
-      web_search_options: { search_context_size: 'medium' }
     };
   } else if (useGoogleApi) {
     // Format payload for Google Gemini API
@@ -519,31 +436,27 @@ export async function fetchAndStream(port, messages, model, profileName) {
       parts: [{ text: msg.content }]
     }));
 
-    // If there's a system message, prepend it to the first user message
-    if (systemMessage && contents.length > 0) {
-      contents[0].parts[0].text = systemMessage + '\n\n' + contents[0].parts[0].text;
-    }
-
     // Thinking control differs by Gemini generation:
     //   - Gemini 3.x: `thinkingLevel` (minimal|low|medium|high). The numeric
     //     `thinkingBudget` is discouraged on 3.x ("may cause unexpected
     //     performance") and the two are mutually exclusive.
     //   - Gemini 2.5: numeric `thinkingBudget` (0 disables, -1 = dynamic).
     let thinkingConfig;
-    if (profile.model.startsWith('gemini-3')) {
+    if (/^gemini-[34]/.test(profile.model)) {
       // Map the shared effort vocabulary onto Gemini 3 thinking levels.
       // 'dynamic' (and anything unmapped) → omit level so the model uses its
       // own default (medium for Flash, high for Pro).
       const effortToLevel = { off: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' };
-      const level = effortToLevel[profile.thinkingEffort];
+      const level = effortToLevel[profile.thinkingEffort] || (profile.model.startsWith('gemini-4') ? 'medium' : undefined);
       thinkingConfig = { includeThoughts: true, ...(level ? { thinkingLevel: level } : {}) };
-    } else if (thinkingBudget !== 0) {
+    } else if (profile.model.startsWith('gemini-2.5')) {
       // -1 = Gemini's native dynamic mode; positive = fixed budget.
       thinkingConfig = { thinkingBudget: thinkingBudget, includeThoughts: true };
     }
 
     payload = {
       contents: contents,
+      ...(systemMessage ? { systemInstruction: { parts: [{ text: systemMessage }] } } : {}),
       generationConfig: {
         temperature: 0.7,
         // Thinking tokens count toward this limit on Gemini, so leave room for
@@ -567,25 +480,17 @@ export async function fetchAndStream(port, messages, model, profileName) {
       stream: true
     };
   } else if (useMoonshotApi) {
-    // Kimi K3 on the Moonshot open platform (OpenAI-compatible). K3 thinking
-    // is always-on server-side and the top-level `reasoning_effort` field
-    // currently accepts only "max" — there is no off switch and no graded
-    // scale to map the UI effort onto, so send it unconditionally (the UI
-    // shows no effort selector for kimi-* models).
+    // Kimi K3 always thinks and accepts low/high/max effort.
     payload = {
       model: profile.model,
       messages: messages,
       stream: true,
-      reasoning_effort: 'max',
+      reasoning_effort: profile.thinkingEffort === 'dynamic' ? 'max' : profile.thinkingEffort,
       // Bound always-on reasoning + output; generous so summaries never clip.
       max_tokens: 32768,
     };
   } else if (useQwenApi) {
-    // Qwen3.8-Max (Alibaba Token Plan compatible-mode). Reasoning is budgeted
-    // via `enable_thinking` + `thinking_budget` (tokens). Fractions of the
-    // output cap follow multipoly's QWEN_BUDGET adapter; even 'off' keeps a
-    // small budget — the model reasons regardless, a tiny budget just
-    // bounds it. Thinking streams separately as `delta.reasoning_content`.
+    // Qwen supports disabling thinking or bounding it with thinking_budget.
     const qwenTokenCap = 16384;
     const budgetFraction = { off: 0.1, low: 0.25, medium: 0.4, high: 0.6, xhigh: 0.8, max: 0.8, dynamic: 0.4 };
     const frac = budgetFraction[profile.thinkingEffort] ?? 0.4;
@@ -595,8 +500,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
       messages: messages,
       stream: true,
       max_tokens: qwenTokenCap,
-      enable_thinking: true,
-      thinking_budget: Math.max(256, Math.round(frac * qwenTokenCap)),
+      enable_thinking: profile.thinkingEffort !== 'off',
+      ...(profile.thinkingEffort !== 'off' ? { thinking_budget: Math.max(256, Math.round(frac * qwenTokenCap)) } : {}),
     };
   } else if (useXaiApi) {
     // Format payload for xAI Responses API (grok-*).
@@ -618,7 +523,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
       stream: true,
       tools: [
         { type: 'web_search' }
-      ]
+      ],
+      ...(/^grok-4\.[67]/.test(model) && profile.thinkingEffort !== 'dynamic' ? { reasoning: { effort: profile.thinkingEffort } } : {})
     };
   } else if (useOpenAIResponsesApi) {
     // Format payload for OpenAI Responses API (GPT-5+ and o-series).
@@ -649,8 +555,9 @@ export async function fetchAndStream(port, messages, model, profileName) {
     //     `reasoning.summary` is rejected alongside `multi_agent`, so ultra
     //     streams only final text — no thinking panel.
     const isGpt56 = profile.model.startsWith('gpt-5.6');
+    const isGpt6 = profile.model.startsWith('gpt-6');
     const uiEffort = profile.thinkingEffort;
-    if (uiEffort === 'off' && isGpt56) {
+    if (uiEffort === 'off' && (isGpt56 || isGpt6)) {
       // GPT-5.6 defaults to medium effort when `reasoning` is omitted, so
       // 'off' must send an explicit 'none'. Older models default to no
       // reasoning, so omitting (below) remains correct for them.
@@ -667,17 +574,13 @@ export async function fetchAndStream(port, messages, model, profileName) {
         // `summary: "auto"` is the most compatible value and lets the API
         // choose detail level based on effort.
         let effortValue = (uiEffort === 'dynamic') ? 'medium' : uiEffort;
-        // 'max' is GPT-5.6+ only; 'pro'/'ultra' can be stale selections from
-        // a previously chosen 5.6 model. Downgrade all three to the older
-        // models' ceiling.
-        if (!isGpt56 && ['max', 'pro', 'ultra'].includes(effortValue)) {
+        // Preserve legacy GPT-5 limits; GPT-6 supports max effort.
+        if (!isGpt56 && !isGpt6 && ['max', 'pro', 'ultra'].includes(effortValue)) {
           effortValue = 'xhigh';
         }
         payload.reasoning = { effort: effortValue, summary: 'auto' };
       }
     }
-    // For 'off': omit `reasoning` entirely. OpenAI's no-reasoning default
-    // is what we want, and avoids edge cases with `effort: "none"`.
 
     // Bound reasoning + output combined to prevent runaway thinking on xhigh.
     // max/pro/ultra do strictly more model work, so they get extra headroom.
@@ -758,18 +661,11 @@ export async function fetchAndStream(port, messages, model, profileName) {
         headers: Object.fromEntries(response.headers.entries())
       });
 
-      try {
-        const errorJson = JSON.parse(errorText);
-        throw new Error(errorJson.error?.message || errorJson.message || `API request failed: ${response.status} ${response.statusText}`);
-      } catch (e) {
-        // If JSON parsing fails, throw the text error
-        throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorText.substring(0, 200)}`);
-      }
+      let errorJson;
+      try { errorJson = JSON.parse(errorText); } catch { /* Plain-text error body. */ }
+      throw new Error(errorJson?.error?.message || errorJson?.message || `API request failed: ${response.status} ${response.statusText} - ${errorText.substring(0, 200)}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let summary = '';
 
     // State tracking for thinking vs. output content
@@ -818,289 +714,275 @@ export async function fetchAndStream(port, messages, model, profileName) {
       gptThinking(port, thinkingBuffer, profileName);
     }
 
-    while (connected) {
-      const { value, done } = await reader.read();
-      if (done) break;
+    let streamCompleted = false;
+    for await (const parsed of readServerEvents(response)) {
+      if (!connected) return;
+      if (parsed.type === 'stream.done' && !useAnthropicApi && !useGoogleApi && !useOpenAIResponsesApi && !useXaiApi && !usePerplexityApi) streamCompleted = true;
+      if (parsed.type === 'response.completed' || parsed.type === 'message_stop' || parsed.candidates?.[0]?.finishReason === 'STOP') streamCompleted = true;
+      const finishReason = parsed.choices?.[0]?.finish_reason;
+      if (finishReason) {
+        if (finishReason !== 'stop') throw new Error(`The model stopped before completing the summary: ${finishReason}`);
+        streamCompleted = true;
+      }
+      if (parsed.error || parsed.type === 'error' || ['response.failed', 'response.incomplete'].includes(parsed.type)) {
+        throw new Error(parsed.error?.message || parsed.response?.error?.message || parsed.message ||
+          (parsed.response?.incomplete_details?.reason ? `Response incomplete: ${parsed.response.incomplete_details.reason}` : 'Provider stream failed'));
+      }
+      if (useAnthropicApi) {
+        // Handle Anthropic streaming format with thinking tokens
+        if (parsed.type === 'content_block_start') {
+          currentBlockType = parsed.content_block?.type;
+          console.log('Starting content block:', currentBlockType);
+        }
+        else if (parsed.type === 'content_block_delta') {
+          const deltaType = parsed.delta?.type;
 
-      buffer += decoder.decode(value);
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
+          if (deltaType === 'thinking_delta') {
+            // Accumulate thinking content
+            const thinkingText = parsed.delta.thinking || '';
+            thinkingBuffer += thinkingText;
+            summary += thinkingText;  // For backward compatibility
+            gptThinking(port, thinkingBuffer, profileName);
+          }
+          else if (deltaType === 'text_delta') {
+            // Accumulate output content
+            const textContent = parsed.delta.text || '';
+            outputBuffer += textContent;
+            summary += textContent;  // For backward compatibility
+            gptMessage(port, outputBuffer, profileName);
+          }
+          // Ignore signature_delta - just for verification
+        }
+        else if (parsed.type === 'content_block_stop') {
+          console.log('Finished content block:', currentBlockType);
+          currentBlockType = null;
+        }
+        else if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
+          anthropicStopReason = parsed.delta.stop_reason;
+          console.log('Anthropic stop reason:', anthropicStopReason);
+        }
+      } else if (useGoogleApi) {
+        // Handle Google Gemini streaming format with thinking tokens
+        // Gemini format: { candidates: [{ content: { parts: [{ text: "...", thought: bool }] } }] }
+        const candidate = parsed.candidates?.[0];
+        if (parsed.promptFeedback?.blockReason) throw new Error(`Gemini blocked the prompt: ${parsed.promptFeedback.blockReason}`);
+        if (candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) {
+          throw new Error(`Gemini stopped: ${candidate.finishReason}`);
+        }
+        const parts = candidate?.content?.parts || [];
 
-      for (const line of lines) {
-        if (line.length === 0) continue;
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
+        // Debug logging for Gemini responses
+        if (parts.length > 0) {
+          console.log('Gemini parts received:', parts.map(p => ({
+            hasText: !!p.text,
+            textLength: p.text?.length || 0,
+            thought: p.thought
+          })));
+        }
 
-          try {
-            const parsed = JSON.parse(data);
-            if (useAnthropicApi) {
-              // Handle Anthropic streaming format with thinking tokens
-              if (parsed.type === 'content_block_start') {
-                currentBlockType = parsed.content_block?.type;
-                console.log('Starting content block:', currentBlockType);
-              }
-              else if (parsed.type === 'content_block_delta') {
-                const deltaType = parsed.delta?.type;
+        // Process all parts in this chunk
+        for (const part of parts) {
+          const text = part.text || '';
+          if (!text) continue;
 
-                if (deltaType === 'thinking_delta') {
-                  // Accumulate thinking content
-                  const thinkingText = parsed.delta.thinking || '';
-                  thinkingBuffer += thinkingText;
-                  summary += thinkingText;  // For backward compatibility
-                  gptThinking(port, thinkingBuffer, profileName);
-                }
-                else if (deltaType === 'text_delta') {
-                  // Accumulate output content
-                  const textContent = parsed.delta.text || '';
-                  outputBuffer += textContent;
-                  summary += textContent;  // For backward compatibility
-                  gptMessage(port, outputBuffer, profileName);
-                }
-                // Ignore signature_delta - just for verification
-              }
-              else if (parsed.type === 'content_block_stop') {
-                console.log('Finished content block:', currentBlockType);
-                currentBlockType = null;
-              }
-              else if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
-                anthropicStopReason = parsed.delta.stop_reason;
-                console.log('Anthropic stop reason:', anthropicStopReason);
-              }
-            } else if (useGoogleApi) {
-              // Handle Google Gemini streaming format with thinking tokens
-              // Gemini format: { candidates: [{ content: { parts: [{ text: "...", thought: bool }] } }] }
-              const candidate = parsed.candidates?.[0];
-              const parts = candidate?.content?.parts || [];
-
-              // Debug logging for Gemini responses
-              if (parts.length > 0) {
-                console.log('Gemini parts received:', parts.map(p => ({
-                  hasText: !!p.text,
-                  textLength: p.text?.length || 0,
-                  thought: p.thought
-                })));
-              }
-
-              // Process all parts in this chunk
-              for (const part of parts) {
-                const text = part.text || '';
-                if (!text) continue;
-
-                // Check if this is thinking or output based on thought boolean
-                if (part.thought === true) {
-                  // This is thinking content
-                  console.log('Gemini thinking detected:', text.substring(0, 50) + '...');
-                  thinkingBuffer += text;
-                  summary += text;  // For backward compatibility
-                  gptThinking(port, thinkingBuffer, profileName);
-                } else {
-                  // This is regular output (thought === false or undefined)
-                  console.log('Gemini output detected:', text.substring(0, 50) + '...');
-                  outputBuffer += text;
-                  summary += text;  // For backward compatibility
-                  gptMessage(port, outputBuffer, profileName);
-                }
-              }
-
-              // Check for grounding metadata (search results)
-              const groundingMetadata = candidate?.groundingMetadata;
-              if (groundingMetadata) {
-                console.log('Google Search grounding metadata:', groundingMetadata);
-              }
-            } else if (usePerplexityApi) {
-              // Handle Perplexity streaming format
-              console.log('Response:', response);
-              console.log("Delta: ", parsed.choices[0].delta);
-
-              const content = parsed.choices[0]?.delta?.content || '';
-              if (content) {
-                summary += content;
-                gptMessage(port, summary, profileName);
-              }
-
-              // Check for citations (Perplexity returns these)
-              const citations = parsed.citations;
-              if (citations) {
-                console.log('Perplexity citations:', citations);
-              }
-            } else if (useOpenRouterApi) {
-              // Handle OpenRouter streaming format (OpenAI-compatible)
-              const content = parsed.choices[0]?.delta?.content || '';
-              if (content) {
-                summary += content;
-                gptMessage(port, summary, profileName);
-              }
-            } else if (useMoonshotApi || useQwenApi) {
-              // Kimi K3 / Qwen3.8 stream OpenAI-compatible SSE with reasoning
-              // on a separate `reasoning_content` delta channel (DeepSeek
-              // style). Reasoning goes to the thinking panel; the popup
-              // collapses it when the first answer token arrives.
-              const delta = parsed.choices?.[0]?.delta || {};
-
-              const reasoningText = delta.reasoning_content || '';
-              if (reasoningText) {
-                thinkingBuffer += reasoningText;
-                summary += reasoningText;  // For backward compatibility
-                gptThinking(port, thinkingBuffer, profileName);
-              }
-
-              const content = delta.content || '';
-              if (content) {
-                outputBuffer += content;
-                summary += content;  // For backward compatibility
-                gptMessage(port, outputBuffer, profileName);
-              }
-            } else if (useXaiApi) {
-              // Handle xAI Responses API streaming format
-              const eventType = parsed.type;
-
-              // Collect citations from response
-              if (parsed.citations && Array.isArray(parsed.citations)) {
-                parsed.citations.forEach((url, index) => {
-                  xaiCitationsMap[index + 1] = url;
-                });
-              }
-              if (eventType === 'response.completed' && parsed.response?.citations) {
-                parsed.response.citations.forEach((url, index) => {
-                  xaiCitationsMap[index + 1] = url;
-                });
-              }
-
-              // Handle text output delta
-              if (eventType === 'response.output_text.delta') {
-                const textDelta = parsed.delta || '';
-                if (textDelta) {
-                  outputBuffer += textDelta;
-                  summary += textDelta;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
-                }
-              }
-              // Handle final text output
-              else if (eventType === 'response.output_text.done') {
-                const finalText = parsed.text || '';
-                if (finalText && finalText.length > outputBuffer.length) {
-                  outputBuffer = finalText;
-                  summary = thinkingBuffer + finalText;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
-                }
-              }
-              // Handle reasoning/thinking content (same part semantics as
-              // OpenAI: separate parts, track the current one for live view)
-              else if (eventType === 'response.reasoning_summary_part.added') {
-                if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
-                  thinkingBuffer += '\n\n';
-                  summary += '\n\n';
-                }
-                openAICurrentPart = '';
-              }
-              else if (eventType === 'response.reasoning_summary_text.delta' ||
-                       eventType === 'response.reasoning.delta') {
-                const reasoningDelta = parsed.delta || '';
-                if (reasoningDelta) {
-                  openAICurrentPart += reasoningDelta;
-                  thinkingBuffer += reasoningDelta;
-                  summary += reasoningDelta;
-                  gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
-                }
-              }
-              // Fallback: OpenAI-compatible choices format
-              else if (parsed.choices?.[0]?.delta) {
-                const delta = parsed.choices[0].delta;
-                const content = delta.content || '';
-                const reasoning = delta.reasoning_content || '';
-
-                if (reasoning) {
-                  thinkingBuffer += reasoning;
-                  summary += reasoning;
-                  gptThinking(port, thinkingBuffer, profileName);
-                }
-                if (content) {
-                  outputBuffer += content;
-                  summary += content;
-                  gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
-                }
-              }
-            } else if (useOpenAIResponsesApi) {
-              // Handle OpenAI Responses API streaming format.
-              const eventType = parsed.type;
-              console.log('OpenAI Responses event:', eventType, parsed);
-
-              if (eventType === 'response.output_item.added') {
-                const item = parsed.item || {};
-                openAIItemMeta[item.id] = {
-                  phase: item.phase,
-                  agentName: parsed.agent?.agent_name ?? item.agent?.agent_name,
-                };
-              }
-              else if (eventType === 'response.reasoning_summary_part.added') {
-                // New summary part: separate it from the previous one and
-                // start a fresh live part for the popup.
-                if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
-                  thinkingBuffer += '\n\n';
-                  summary += '\n\n';
-                }
-                openAICurrentPart = '';
-              }
-              else if (eventType === 'response.output_text.delta') {
-                const textDelta = parsed.delta || '';
-                if (textDelta && isOpenAIFinalAnswer(parsed)) {
-                  outputBuffer += textDelta;
-                  summary += textDelta;
-                  gptMessage(port, outputBuffer, profileName);
-                } else if (textDelta) {
-                  // Subagent / interim-phase output (ultra): show as thinking
-                  // so the work is visible, but keep it out of the summary.
-                  thinkingBuffer += textDelta;
-                  gptThinking(port, thinkingBuffer, profileName);
-                }
-              }
-              else if (eventType === 'response.output_text.done') {
-                const finalText = parsed.text || '';
-                if (finalText && isOpenAIFinalAnswer(parsed) && finalText.length > outputBuffer.length) {
-                  outputBuffer = finalText;
-                  summary = thinkingBuffer + finalText;
-                  gptMessage(port, outputBuffer, profileName);
-                }
-              }
-              else if (eventType === 'response.reasoning_summary_text.delta' ||
-                       eventType === 'response.reasoning.delta') {
-                const reasoningDelta = parsed.delta || '';
-                if (reasoningDelta) {
-                  openAICurrentPart += reasoningDelta;
-                  thinkingBuffer += reasoningDelta;
-                  summary += reasoningDelta;
-                  gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
-                }
-              }
-              else if (eventType === 'response.failed' || eventType === 'response.incomplete') {
-                const errMsg = parsed.response?.error?.message || `Response ${eventType.replace('response.', '')}`;
-                throw new Error(errMsg);
-              }
-              else if (eventType === 'error') {
-                // Bare error event (no `response.` prefix) — emitted on
-                // mid-stream errors. Without this branch, the loop would
-                // keep reading until the connection force-closes.
-                const errMsg = parsed.message || parsed.error?.message || 'Stream error';
-                throw new Error(errMsg);
-              }
-            } else {
-              // Handle OpenAI Chat Completions streaming format (legacy GPT)
-              const content = parsed.choices[0]?.delta?.content || '';
-              if (content) {
-                summary += content;
-                gptMessage(port, summary, profileName);
-              }
-            }
-          } catch (e) {
-            console.error('Parse error:', e, 'Line:', line);
+          // Check if this is thinking or output based on thought boolean
+          if (part.thought === true) {
+            // This is thinking content
+            console.log('Gemini thinking detected:', text.substring(0, 50) + '...');
+            thinkingBuffer += text;
+            summary += text;  // For backward compatibility
+            gptThinking(port, thinkingBuffer, profileName);
+          } else {
+            // This is regular output (thought === false or undefined)
+            console.log('Gemini output detected:', text.substring(0, 50) + '...');
+            outputBuffer += text;
+            summary += text;  // For backward compatibility
+            gptMessage(port, outputBuffer, profileName);
           }
         }
+
+        // Check for grounding metadata (search results)
+        const groundingMetadata = candidate?.groundingMetadata;
+        if (groundingMetadata) {
+          console.log('Google Search grounding metadata:', groundingMetadata);
+        }
+      } else if (useOpenRouterApi) {
+        // Handle OpenRouter streaming format (OpenAI-compatible)
+        const content = parsed.choices?.[0]?.delta?.content || '';
+        if (content) {
+          summary += content;
+          gptMessage(port, summary, profileName);
+        }
+      } else if (useMoonshotApi || useQwenApi) {
+        // Kimi K3 / Qwen3.8 stream OpenAI-compatible SSE with reasoning
+        // on a separate `reasoning_content` delta channel (DeepSeek
+        // style). Reasoning goes to the thinking panel; the popup
+        // collapses it when the first answer token arrives.
+        const delta = parsed.choices?.[0]?.delta || {};
+
+        const reasoningText = delta.reasoning_content || '';
+        if (reasoningText) {
+          thinkingBuffer += reasoningText;
+          summary += reasoningText;  // For backward compatibility
+          gptThinking(port, thinkingBuffer, profileName);
+        }
+
+        const content = delta.content || '';
+        if (content) {
+          outputBuffer += content;
+          summary += content;  // For backward compatibility
+          gptMessage(port, outputBuffer, profileName);
+        }
+      } else if (useXaiApi) {
+        // Handle xAI Responses API streaming format
+        const eventType = parsed.type;
+
+        // Collect citations from response
+        if (parsed.citations && Array.isArray(parsed.citations)) {
+          parsed.citations.forEach((url, index) => {
+            xaiCitationsMap[index + 1] = url;
+          });
+        }
+        if (eventType === 'response.completed' && parsed.response?.citations) {
+          parsed.response.citations.forEach((url, index) => {
+            xaiCitationsMap[index + 1] = url;
+          });
+        }
+
+        // Handle text output delta
+        if (eventType === 'response.output_text.delta') {
+          const textDelta = parsed.delta || '';
+          if (textDelta) {
+            outputBuffer += textDelta;
+            summary += textDelta;
+            gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
+          }
+        }
+        // Handle final text output
+        else if (eventType === 'response.output_text.done') {
+          const finalText = parsed.text || '';
+          if (finalText && finalText.length > outputBuffer.length) {
+            outputBuffer = finalText;
+            summary = thinkingBuffer + finalText;
+            gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
+          }
+        }
+        // Handle reasoning/thinking content (same part semantics as
+        // OpenAI: separate parts, track the current one for live view)
+        else if (eventType === 'response.reasoning_summary_part.added') {
+          if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
+            thinkingBuffer += '\n\n';
+            summary += '\n\n';
+          }
+          openAICurrentPart = '';
+        }
+        else if (eventType === 'response.reasoning_summary_text.delta' ||
+                 eventType === 'response.reasoning.delta') {
+          const reasoningDelta = parsed.delta || '';
+          if (reasoningDelta) {
+            openAICurrentPart += reasoningDelta;
+            thinkingBuffer += reasoningDelta;
+            summary += reasoningDelta;
+            gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
+          }
+        }
+        // Fallback: OpenAI-compatible choices format
+        else if (parsed.choices?.[0]?.delta) {
+          const delta = parsed.choices[0].delta;
+          const content = delta.content || '';
+          const reasoning = delta.reasoning_content || '';
+
+          if (reasoning) {
+            thinkingBuffer += reasoning;
+            summary += reasoning;
+            gptThinking(port, thinkingBuffer, profileName);
+          }
+          if (content) {
+            outputBuffer += content;
+            summary += content;
+            gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
+          }
+        }
+      } else if (useOpenAIResponsesApi || usePerplexityApi) {
+        // Handle OpenAI Responses API streaming format.
+        const eventType = parsed.type;
+        console.log('OpenAI Responses event:', eventType, parsed);
+
+        if (eventType === 'response.output_item.added') {
+          const item = parsed.item || {};
+          openAIItemMeta[item.id] = {
+            phase: item.phase,
+            agentName: parsed.agent?.agent_name ?? item.agent?.agent_name,
+          };
+        }
+        else if (eventType === 'response.reasoning_summary_part.added') {
+          // New summary part: separate it from the previous one and
+          // start a fresh live part for the popup.
+          if (thinkingBuffer && !thinkingBuffer.endsWith('\n\n')) {
+            thinkingBuffer += '\n\n';
+            summary += '\n\n';
+          }
+          openAICurrentPart = '';
+        }
+        else if (eventType === 'response.output_text.delta') {
+          const textDelta = parsed.delta || '';
+          if (textDelta && isOpenAIFinalAnswer(parsed)) {
+            outputBuffer += textDelta;
+            summary += textDelta;
+            gptMessage(port, outputBuffer, profileName);
+          } else if (textDelta) {
+            // Subagent / interim-phase output (ultra): show as thinking
+            // so the work is visible, but keep it out of the summary.
+            thinkingBuffer += textDelta;
+            gptThinking(port, thinkingBuffer, profileName);
+          }
+        }
+        else if (eventType === 'response.output_text.done') {
+          const finalText = parsed.text || '';
+          if (finalText && isOpenAIFinalAnswer(parsed) && finalText.length > outputBuffer.length) {
+            outputBuffer = finalText;
+            summary = thinkingBuffer + finalText;
+            gptMessage(port, outputBuffer, profileName);
+          }
+        }
+        else if (eventType === 'response.reasoning_summary_text.delta' ||
+                 eventType === 'response.reasoning.delta') {
+          const reasoningDelta = parsed.delta || '';
+          if (reasoningDelta) {
+            openAICurrentPart += reasoningDelta;
+            thinkingBuffer += reasoningDelta;
+            summary += reasoningDelta;
+            gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
+          }
+        }
+        else if (eventType === 'response.failed' || eventType === 'response.incomplete') {
+          const errMsg = parsed.response?.error?.message || `Response ${eventType.replace('response.', '')}`;
+          throw new Error(errMsg);
+        }
+        else if (eventType === 'error') {
+          // Bare error event (no `response.` prefix) — emitted on
+          // mid-stream errors. Without this branch, the loop would
+          // keep reading until the connection force-closes.
+          const errMsg = parsed.message || parsed.error?.message || 'Stream error';
+          throw new Error(errMsg);
+        }
+      } else {
+        // Handle OpenAI Chat Completions streaming format (legacy GPT)
+        const content = parsed.choices?.[0]?.delta?.content || '';
+        if (content) {
+          summary += content;
+          gptMessage(port, summary, profileName);
+        }
       }
+      // The protocol completion event is authoritative; do not await TCP EOF.
+      if (streamCompleted) break;
     }
 
+    if (!streamCompleted) throw new Error('The API stream ended before completing the summary.');
+
     // Send done message with output buffer (or full summary for backward compatibility)
-    let finalContent = outputBuffer || summary;
+    let finalContent = (useAnthropicApi || useGoogleApi || useMoonshotApi || useQwenApi || useXaiApi || useOpenAIResponsesApi || usePerplexityApi) ? outputBuffer : summary;
+    if (anthropicStopReason === 'max_tokens') throw new Error('The model reached its token limit before completing the summary. Lower thinking effort or try a different model.');
     if (finalContent) {
       // Transform xAI citations to domain-based format in final output
       if (useXaiApi) {

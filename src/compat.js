@@ -5,7 +5,7 @@ async function updateConfig(keys, callback) {
 }
 
 const defaultProfile = {
-  model: 'gpt-3.5-turbo-16k',
+  model: 'gpt-6-luna',
   customPrompts: ['Please summarize the contents of this web page for brevity.'],
 };
 
