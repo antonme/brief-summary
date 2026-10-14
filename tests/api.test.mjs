@@ -208,14 +208,17 @@ for (const model of ['openrouter/z-ai/glm-5.3', 'kimi-k3', 'qwen3.8-max', 'gpt-4
   });
 }
 
-test('Grok reports web search activity while no answer text is available', async () => {
+test('Grok displays web searches inline with its reasoning summaries', async () => {
   const { sent } = await run('grok-4.7', 'dynamic', [
     { type: 'response.reasoning_summary_text.delta', delta: 'Planning research' },
     { type: 'response.web_search_call.searching', item_id: 'search_1' },
     { type: 'response.web_search_call.completed', item_id: 'search_1' },
     answer, completed,
   ]);
-  assert.ok(sent.some(e => e.action === 'GPT_STATUS' && /search/i.test(e.status)));
+  const thinking = sent.filter(e => e.action === 'GPT_THINKING');
+  assert.ok(thinking.some(e => e.thinking.includes('Planning research') && /searching the web/i.test(e.thinking)));
+  assert.ok(thinking.some(e => /searching the web/i.test(e.current || '')));
+  assert.equal(sent.some(e => e.action === 'GPT_STATUS'), false);
   assert.equal(sent.at(-1).action, 'GPT_DONE');
 });
 test('Grok explicitly sends its default high reasoning effort', async () => {

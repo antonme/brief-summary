@@ -152,7 +152,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   function getStream(profile) {
     if (!streams[profile]) {
-      streams[profile] = { summary: null, thinking: null, thinkingComplete: false, status: '', working: false, started: false };
+      streams[profile] = { summary: null, thinking: null, thinkingComplete: false, working: false, started: false };
     }
     return streams[profile];
   }
@@ -180,7 +180,6 @@ document.addEventListener("DOMContentLoaded", async function () {
     currentModelName = profileData[profileKey]?.model || "unknown";
     currentEffort = profileData[profileKey]?.thinkingEffort || "";
     modelFooter.classList.add("visually-hidden");
-    showStreamStatus(getStream(profileName).status);
     updateSummary(
       `<div class="d-flex align-items-center gap-2">` +
         `<div class="thinking-dots"><span></span><span></span><span></span></div>` +
@@ -198,12 +197,6 @@ document.addEventListener("DOMContentLoaded", async function () {
     modelFooter.classList.add("visually-hidden");
   }
 
-  function showStreamStatus(status = '') {
-    const element = document.getElementById('streamStatus');
-    element.textContent = status;
-    element.classList.toggle('visually-hidden', !status);
-  }
-
   async function onMessage(msg) {
     if (msg == null) return;
 
@@ -212,13 +205,9 @@ document.addEventListener("DOMContentLoaded", async function () {
     const isCurrent = msgProfile === currentProfile;
 
     switch (msg.action) {
-      case 'GPT_STATUS':
-        stream.status = msg.status;
-        if (isCurrent) showStreamStatus(msg.status);
-        break;
-
       case "GPT_THINKING":
         stream.thinking = msg.thinking;
+        stream.thinkingComplete = false;
         if (!stream.started) {
           stream.started = true;
           setStreamingIndicator(msgProfile, "streaming");
@@ -229,8 +218,6 @@ document.addEventListener("DOMContentLoaded", async function () {
         break;
 
       case "GPT_MESSAGE":
-        stream.status = "";
-        if (isCurrent) showStreamStatus();
         stream.summary = msg.summary;
         if (!stream.started) {
           stream.started = true;
@@ -249,8 +236,6 @@ document.addEventListener("DOMContentLoaded", async function () {
 
       case "GPT_DONE": {
         stream.working = false;
-        stream.status = "";
-        if (isCurrent) showStreamStatus();
         setStreamingIndicator(msgProfile, false);
         // Save to this profile's cache (uses msg.profile, not currentProfile)
         await saveSummary(stream.summary, msg.model, msgProfile, stream.thinking);
@@ -272,8 +257,6 @@ document.addEventListener("DOMContentLoaded", async function () {
 
       case "GPT_ERROR":
         stream.working = false;
-        stream.status = "";
-        if (isCurrent) showStreamStatus();
         setStreamingIndicator(msgProfile, false);
         if (isCurrent) {
           reportError(msg.error);
@@ -458,7 +441,6 @@ document.addEventListener("DOMContentLoaded", async function () {
   // Update the model and instructions when the profile changes
   async function selectProfile(selectedProfileName) {
     currentProfile = selectedProfileName;
-    showStreamStatus(getStream(selectedProfileName).status);
 
     // Update the active profile button classes
     const buttons = profileContainer.getElementsByClassName("btn");
@@ -697,8 +679,10 @@ document.addEventListener("DOMContentLoaded", async function () {
       const thinkingSection = document.getElementById("thinkingSection");
       const thinkingContent = document.getElementById("thinkingContent");
 
-      // Show the thinking section
+      // Reopen the live text when thinking resumes after interim output.
       thinkingSection.classList.remove("visually-hidden");
+      thinkingContent.classList.remove("visually-hidden");
+      document.getElementById("thinkingCollapsed").classList.add("visually-hidden");
 
       // Update the streaming content (formatted as markdown)
       thinkingContent.innerHTML = format(thinkingText);
@@ -762,8 +746,6 @@ document.addEventListener("DOMContentLoaded", async function () {
     const stream = getStream(currentProfile);
     stream.thinking = null;
     stream.thinkingComplete = false;
-    stream.status = "";
-    showStreamStatus();
     clearThinking();
 
     const url = await getOriginalTabUrl();

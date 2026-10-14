@@ -849,7 +849,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
           'response.web_search_call.searching': 'Grok is searching the web…',
           'response.web_search_call.completed': 'Waiting for Grok to finish reasoning over the search results…',
         };
-        if (statuses[eventType]) port.postMessage({ action: 'GPT_STATUS', status: statuses[eventType], profile: profileName });
+        if (statuses[eventType]) {
+          const searchText = `\n\n_${statuses[eventType]}_\n\n`;
+          thinkingBuffer += searchText;
+          openAICurrentPart += searchText;
+          gptThinking(port, thinkingBuffer, profileName, openAICurrentPart);
+        }
         // Collect citations from response
         if (parsed.citations && Array.isArray(parsed.citations)) {
           parsed.citations.forEach((url, index) => {

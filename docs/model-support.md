@@ -35,3 +35,7 @@ Credentials for Anthropic, Google, Perplexity, xAI, Moonshot, Alibaba, and OpenR
 The saved browser key was subsequently tested without exporting it. Grok 4.7 completed a simple live request in 13.5 seconds and the reported [Financial Times article](https://www.ft.com/content/60d09841-052a-44f3-a8ae-52c38fdbb5ab?syn-25a6b1a6=1) in 144.4 seconds with the saved Grok profile and cross-profile context. The article stream contained web-search activity and a long interval without visible reasoning summaries before the final answer.
 
 Version 3.1.1 shows search progress, explicitly preserves the default high effort, recovers answer text from the completed response, and gives stalled requests a 900-second deadline. The live-check script uses the same deadline. This follows [xAI’s timeout guidance](https://docs.x.ai/developers/model-capabilities/text/best-practices). A lost background connection is now shown as an error instead of leaving the popup waiting. The stalled original run was not captured, so its precise failure is not established; the same input did complete in the instrumented reproduction.
+
+Version 3.1.2 places search activity inline in the thinking text, keeping a single chronological view of searches and reasoning summaries.
+
+The popup DOM test also reproduced and verified a separate display bug: resumed thinking stayed hidden after interim answer text collapsed the panel. Version 3.1.2 reopens the live thinking view when new reasoning/search text arrives.

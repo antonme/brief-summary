@@ -1,3 +1,7 @@
+# 3.1.2
+- Display Grok search activity inline with reasoning summaries instead of a separate status line.
+- Reopen the thinking text when reasoning resumes after interim output.
+
 # 3.1.1
 - Show Grok web-search activity during otherwise quiet streams.
 - Bound stalled Grok requests to 15 minutes, preserve final-response text, and report interrupted background connections.
