@@ -18,7 +18,7 @@ async function run(model, effort = 'dynamic', events = [answer, completed], opti
   const originalError = console.error;
   console.log = console.error = () => {};
   globalThis.fetch = async (url, init) => {
-    request = { url, headers: init.headers, body: JSON.parse(init.body) };
+    request = { url, headers: init.headers, body: JSON.parse(init.body), signal: init.signal };
     if (options.httpError) return new Response(JSON.stringify({ error: { message: 'Invalid effort' } }), { status: 400 });
     const text = events.map(e => `data: ${JSON.stringify(e)}\r\n\r\n`).join('') + (options.rawDone ? 'data:[DONE]\r\n\r\n' : '');
     const bytes = new TextEncoder().encode(text);
@@ -26,7 +26,9 @@ async function run(model, effort = 'dynamic', events = [answer, completed], opti
       // Network chunks can split JSON, SSE delimiters and multibyte text.
       if (options.fragmented) for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
       else controller.enqueue(bytes);
-      if (options.failAfterTerminal) setTimeout(() => controller.error(new Error('Transport failed after completion')), 20);
+      if (options.neverEnds) {
+        init.signal?.addEventListener('abort', () => controller.error(init.signal.reason), { once: true });
+      } else if (options.failAfterTerminal) setTimeout(() => controller.error(new Error('Transport failed after completion')), 20);
       else controller.close();
     } }), { headers: { 'Content-Type': 'text/event-stream' } });
   };
@@ -205,3 +207,56 @@ for (const model of ['openrouter/z-ai/glm-5.3', 'kimi-k3', 'qwen3.8-max', 'gpt-4
     assert.equal(sent.at(-1).summary, 'Answer');
   });
 }
+
+test('Grok reports web search activity while no answer text is available', async () => {
+  const { sent } = await run('grok-4.7', 'dynamic', [
+    { type: 'response.reasoning_summary_text.delta', delta: 'Planning research' },
+    { type: 'response.web_search_call.searching', item_id: 'search_1' },
+    { type: 'response.web_search_call.completed', item_id: 'search_1' },
+    answer, completed,
+  ]);
+  assert.ok(sent.some(e => e.action === 'GPT_STATUS' && /search/i.test(e.status)));
+  assert.equal(sent.at(-1).action, 'GPT_DONE');
+});
+test('Grok explicitly sends its default high reasoning effort', async () => {
+  const { request } = await run('grok-4.7', 'dynamic');
+  assert.equal(request.body.reasoning?.effort, 'high');
+});
+test('Grok surfaces a deadline error after a thinking-only stream stalls for 15 minutes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const running = run('grok-4.7', 'dynamic', [
+    { type: 'response.reasoning_summary_text.delta', delta: 'Planning research' },
+  ], { neverEnds: true });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(900_000);
+  // An unfixed client never completes; close the test with a bounded diagnostic.
+  const result = await Promise.race([running, new Promise(resolve => setImmediate(() => resolve(null)))]);
+  assert.ok(result, 'A stalled Grok stream must terminate at its 15-minute deadline');
+  assert.equal(result.sent.at(-1).action, 'GPT_ERROR');
+  assert.match(result.sent.at(-1).error, /15 minutes/);
+});
+test('Grok uses final response content when a provider omits answer deltas', async () => {
+  const { sent } = await run('grok-4.7', 'low', [
+    { type: 'response.reasoning_summary_text.delta', delta: 'Planning research' },
+    { type: 'response.completed', response: { status: 'completed', output: [
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Final answer' }] },
+    ] } },
+  ]);
+  assert.equal(sent.at(-1).action, 'GPT_DONE');
+  assert.equal(sent.at(-1).summary, 'Final answer');
+});
+test('Grok final-response fallback excludes interim assistant commentary', async () => {
+  const { sent } = await run('grok-4.7', 'low', [{ type: 'response.completed', response: { status: 'completed', output: [
+    { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'I will research this.' }] },
+    { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Final answer' }] },
+  ] } }]);
+  assert.equal(sent.at(-1).summary, 'Final answer');
+});
+test('Grok completed-response fallback sends linked citations to the popup', async () => {
+  const { sent } = await run('grok-4.7', 'low', [{ type: 'response.completed', response: { status: 'completed', citations: ['https://example.com/source'], output: [
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Answer [1]' }] },
+  ] } }]);
+  const message = sent.find(e => e.action === 'GPT_MESSAGE');
+  assert.match(message.summary, /href="https:\/\/example.com\/source"/);
+  assert.equal(message.summary, sent.at(-1).summary);
+});

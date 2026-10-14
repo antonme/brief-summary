@@ -118,7 +118,7 @@ async function* readServerEvents(response) {
 }
 
 // Modify fetchCompletions to handle CORS for Perplexity and Google Gemini
-async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '', useOpenAIResponsesApi = false, useMoonshotApi = false, useQwenApi = false) {
+async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePerplexityApi = false, useGoogleApi = false, useOpenRouterApi = false, useXaiApi = false, model = '', useOpenAIResponsesApi = false, useMoonshotApi = false, useQwenApi = false, signal) {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -200,7 +200,8 @@ async function fetchCompletions(apiKey, payload, useAnthropicApi = false, usePer
     return fetch(XAI_ENDPOINT, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal,
     });
   } else if (useMoonshotApi || useQwenApi) {
     // Both are OpenAI-compatible Chat Completions with plain Bearer auth;
@@ -524,7 +525,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
       tools: [
         { type: 'web_search' }
       ],
-      ...(/^grok-4\.[67]/.test(model) && profile.thinkingEffort !== 'dynamic' ? { reasoning: { effort: profile.thinkingEffort } } : {})
+      ...(/^grok-4\.[67]/.test(model) ? { reasoning: { effort: profile.thinkingEffort === 'dynamic' ? 'high' : profile.thinkingEffort } } : {})
     };
   } else if (useOpenAIResponsesApi) {
     // Format payload for OpenAI Responses API (GPT-5+ and o-series).
@@ -643,14 +644,21 @@ export async function fetchAndStream(port, messages, model, profileName) {
 
 
   let connected = true;
+  const requestController = new AbortController();
+  // xAI recommends at least 900 seconds for reasoning requests. Bound stalled
+  // streams without treating ordinary silent reasoning intervals as failures.
+  const requestTimeout = useXaiApi ? setTimeout(() => {
+    requestController.abort(new Error('Grok did not finish within 15 minutes. Try a lower thinking effort or retry the request.'));
+  }, 900_000) : undefined;
   port.onDisconnect.addListener(() => {
     connected = false;
+    if (useXaiApi) requestController.abort();
   });
 
   try {
     await debug('PAYLOAD', payload);
 
-    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model, useOpenAIResponsesApi, useMoonshotApi, useQwenApi);
+    const response = await fetchCompletions(selectedApiKey, payload, useAnthropicApi, usePerplexityApi, useGoogleApi, useOpenRouterApi, useXaiApi, profile.model, useOpenAIResponsesApi, useMoonshotApi, useQwenApi, requestController.signal);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -836,7 +844,12 @@ export async function fetchAndStream(port, messages, model, profileName) {
       } else if (useXaiApi) {
         // Handle xAI Responses API streaming format
         const eventType = parsed.type;
-
+        const statuses = {
+          'response.web_search_call.in_progress': 'Grok is starting a web search…',
+          'response.web_search_call.searching': 'Grok is searching the web…',
+          'response.web_search_call.completed': 'Waiting for Grok to finish reasoning over the search results…',
+        };
+        if (statuses[eventType]) port.postMessage({ action: 'GPT_STATUS', status: statuses[eventType], profile: profileName });
         // Collect citations from response
         if (parsed.citations && Array.isArray(parsed.citations)) {
           parsed.citations.forEach((url, index) => {
@@ -847,6 +860,17 @@ export async function fetchAndStream(port, messages, model, profileName) {
           parsed.response.citations.forEach((url, index) => {
             xaiCitationsMap[index + 1] = url;
           });
+        }
+
+        if (eventType === 'response.completed') {
+          // The completed response carries the authoritative full answer.
+          // Some transports omit individual text deltas or send only a prefix.
+          const finalMessage = (parsed.response?.output || []).filter(item => item.type === 'message' && item.role === 'assistant' && (!item.phase || item.phase === 'final_answer')).at(-1);
+          const finalText = (finalMessage?.content || []).filter(part => part.type === 'output_text').map(part => part.text || '').join('');
+          if (finalText) {
+            outputBuffer = finalText;
+            gptMessage(port, transformCitationsToDomains(outputBuffer, xaiCitationsMap), profileName);
+          }
         }
 
         // Handle text output delta
@@ -877,7 +901,7 @@ export async function fetchAndStream(port, messages, model, profileName) {
           openAICurrentPart = '';
         }
         else if (eventType === 'response.reasoning_summary_text.delta' ||
-                 eventType === 'response.reasoning.delta') {
+                 eventType === 'response.reasoning.delta' || eventType === 'response.reasoning_text.delta') {
           const reasoningDelta = parsed.delta || '';
           if (reasoningDelta) {
             openAICurrentPart += reasoningDelta;
@@ -996,6 +1020,8 @@ export async function fetchAndStream(port, messages, model, profileName) {
     }
   } catch (error) {
     console.error('Stream error:', error);
-    gptError(port, error.message, profileName);
+    if (connected) gptError(port, requestController.signal.aborted ? (requestController.signal.reason?.message || error.message) : error.message, profileName);
+  } finally {
+    if (requestTimeout !== undefined) clearTimeout(requestTimeout);
   }
 }

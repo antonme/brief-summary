@@ -1,3 +1,8 @@
+# 3.1.1
+- Show Grok web-search activity during otherwise quiet streams.
+- Bound stalled Grok requests to 15 minutes, preserve final-response text, and report interrupted background connections.
+- Verify Grok 4.7 live in the installed browser: the reported FT article completed in 144.4 seconds at dynamic (high) effort.
+
 # 3.1.0
 - Refresh model presets for GPT-6.1 Sol, GPT-6 Astra/Sol/Luna, Claude Fable 5.1 and Opus/Sonnet/Haiku 5.5, Gemini 4 Argon and 3.8 Flash, Grok 4.7, and current open models through OpenRouter.
 - Migrate Perplexity requests to the Agent API while preserving saved Sonar profiles through preset mappings.

@@ -32,7 +32,7 @@ for (let index = 0; index < MODEL_GROUPS.length; index++) {
   for (const [model] of models) {
     if (requested.size && !requested.has(model)) continue;
     checked++;
-    const timeoutMs = model.includes('fable') ? 1_200_000 : 180_000;
+    const timeoutMs = model.includes('fable') ? 1_200_000 : model.startsWith('grok-') ? 900_000 : 180_000;
     let result;
     for (let attempt = 1; attempt <= 3; attempt++) {
       const events = [];

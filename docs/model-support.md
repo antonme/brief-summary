@@ -28,4 +28,10 @@ Version 3.1.0 refreshes the presets for the existing eight providers. Model IDs 
 
 OpenAI's authenticated model list returned `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. All four subsequently streamed the expected `API_OK` response through the extension's request builders and response parser.
 
-Credentials for Anthropic, Google, Perplexity, xAI, Moonshot, Alibaba, and OpenRouter were unavailable in the shell. Their schemas and stream handling are covered by local tests; authenticated success has not been established for those providers. Re-run `npm run check:apis` with the corresponding environment variables to complete the live audit. Browser CORS and extension host permissions should also be checked in the target browser with its configured keys.
+Credentials for Anthropic, Google, Perplexity, xAI, Moonshot, Alibaba, and OpenRouter were unavailable in the shell during the initial audit. Their schemas and stream handling are covered by local tests; authenticated success has not been established for those providers. Re-run `npm run check:apis` with the corresponding environment variables to complete the live audit. Browser CORS and extension host permissions should also be checked in the target browser with its configured keys.
+
+### Grok follow-up — October 14, 2026
+
+The saved browser key was subsequently tested without exporting it. Grok 4.7 completed a simple live request in 13.5 seconds and the reported [Financial Times article](https://www.ft.com/content/60d09841-052a-44f3-a8ae-52c38fdbb5ab?syn-25a6b1a6=1) in 144.4 seconds with the saved Grok profile and cross-profile context. The article stream contained web-search activity and a long interval without visible reasoning summaries before the final answer.
+
+Version 3.1.1 shows search progress, explicitly preserves the default high effort, recovers answer text from the completed response, and gives stalled requests a 900-second deadline. The live-check script uses the same deadline. This follows [xAI’s timeout guidance](https://docs.x.ai/developers/model-capabilities/text/best-practices). A lost background connection is now shown as an error instead of leaving the popup waiting. The stalled original run was not captured, so its precise failure is not established; the same input did complete in the instrumented reproduction.
